@@ -1,0 +1,3 @@
+# Paths Claude Code should never read into context, even on request.
+private/
+.git/

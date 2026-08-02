@@ -1,0 +1,31 @@
+# ── Layer 1: never in git, anywhere ─────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+credentials*.json
+.DS_Store
+Thumbs.db
+Icon[]
+
+# ── Layer 2: per-machine, not shared ────────────────────────────
+.claude/
+.obsidian/
+node_modules/
+dist/
+build/
+venv/
+__pycache__/
+
+# ── Layer 3: privacy carve-out: your data that must not sync ──
+# Everything in private/ stays on this machine only. Put raw client
+# materials, NDA content, exports with personal data there.
+# (private/* + negation, not private/: git cannot re-include a file
+# under an excluded directory, so the folder's own README needs this form.)
+private/*
+!private/README.md
+# Machine-generated index: regenerated locally, never merged.
+memory/INDEX.generated.md
+# Session-scratch files some skills produce:
+*.handover.md
+SETUP-STATE.md
