@@ -52,9 +52,14 @@ else that belongs to the project itself stays out of the index.
   detail lives only in memory, write it into the folder first, then shorten.
   Update the existing file rather than creating a duplicate; check for one
   before adding a new one.
+- **Status and Next action are rewritten, never appended to.** In a project
+  file, `## Status` and `## Next action` always describe the present; the
+  chronology goes in `## Updates`. Either one longer than an index line is out
+  of standard: move the detail to `## Updates` or the project folder.
 - **Archive, never delete.** Closing an item means: set `status: ❌` in the
   frontmatter and in the body, move the file to `memory/archive/`, and move
-  its index line from its section down to `## Archive`. Soft-delete only.
+  its index line from `MEMORY.md` to `memory/archive/INDEX.md`. Soft-delete
+  only.
 - **Don't save what is derivable elsewhere.** Skip anything the repo already
   records (code, git history, a CLAUDE.md) or anything that only matters to
   one conversation.
@@ -69,6 +74,34 @@ else that belongs to the project itself stays out of the index.
   `reference_*` and `feedback_*` files don't carry a status field: they are
   reference material and standing rules, not work with a state.
 
+## Where index rows live
+
+`MEMORY.md` is auto-loaded on every session start and the host tool truncates
+it past a size cap, so it carries only rows the daily briefing needs: projects
+and strategic directions, plus feedback rules. Two kinds of rows live in
+sibling files, read on demand:
+
+- `reference_*` rows in `memory/REFERENCES.md`. The files themselves stay in
+  `memory/`; only the row moves. A project that uses a reference links it
+  with a `[[wikilink]]`.
+- Closed items in `memory/archive/INDEX.md`, with links relative to the
+  archive folder (`(project_slug.md)`, no `archive/` prefix).
+
+Same one-line row format everywhere. The scripts in `scripts/` and the
+checks in `/memory-checkup` read rows from all three files, and still accept
+a repo that keeps everything inline in `MEMORY.md`.
+
+## Memory roots (opt-in)
+
+`memory/` is the primary root. A team that adopts federated roots
+(`docs/ADVANCED.md` section 8) keeps one more root per area that needs it,
+at `areas/<name>/memory/`, with this file as the single standard for all of
+them: same row format, same frontmatter, same archive convention, same
+preserve-first rule. An item has one home, the root that owns its next
+action; the primary index points at each area root with one row under
+`## Areas`, with no status and no next action on it. Without an area root
+none of this applies and `memory/` is the whole layer.
+
 ## Anti-patterns
 
 - ❌ Relative time words ("today", "next week", "recently") instead of an
@@ -80,6 +113,9 @@ else that belongs to the project itself stays out of the index.
 - ❌ Appending a new dated line to the index without collapsing the previous
   one, letting `MEMORY.md` grow without bound.
 - ❌ A `[[wikilink]]` or file path that does not resolve to a real file.
+- ❌ The same item in two memory roots (the gate reports `DUP-ROOT`): one
+  home, the other root links it.
+- ❌ A status or a next action on a `## Areas` pointer row.
 
 ## When two debriefs collide
 

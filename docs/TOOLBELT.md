@@ -17,15 +17,3 @@ try to cover on its own. Install through Claude Code:
 /plugin install superpowers
 ```
 
-## Optional extras
-
-The following are unrelated open source skills by this template's author. External,
-separately maintained, not part of Company Brain OS: install only what's relevant to
-your own work.
-
-- **claude-slides**: build HTML slide decks with Claude Code, from a one-line brief to
-  a rendered deck. https://github.com/marcogalluccio/claude-slides
-- **claude-video**: edit talking-head and montage video by describing the cut to
-  Claude Code, no timeline UI. https://github.com/marcogalluccio/claude-video
-- **claude-reel**: build vertical 9:16 talking-head reels, subtitles, animated
-  overlays, camera moves, with Claude Code. https://github.com/marcogalluccio/claude-reel

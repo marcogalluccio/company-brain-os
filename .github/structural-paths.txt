@@ -1,0 +1,30 @@
+# Structural paths (docs/GOVERNANCE.md step 2).
+#
+# A path listed here never lands on `main` through the session debrief. The
+# debrief refuses to commit it there and offers a feature branch instead,
+# which /ship turns into a pull request. This applies to every operator.
+#
+# Syntax, one entry per line:
+#   pattern      shell glob matched against the whole repo-relative path;
+#                `*` also matches `/`, so `skills/*` covers every depth.
+#   !pattern     exception: a path matching it is never structural, even if a
+#                pattern would catch it. Exceptions win wherever they sit.
+#   # comment    ignored, as are blank lines.
+#
+# The file ships inert: nothing below is active until you uncomment or add a
+# line. The block below is the recommended starting point once you adopt
+# step 2: the skills suite, the scripts, the git plumbing, and the protected
+# files, that is the few CLAUDE.md files deciding how every agent behaves.
+# Area CLAUDE.md files (areas/<name>/CLAUDE.md) are deliberately absent: they
+# describe a folder and change often, so they keep landing on `main` through
+# the debrief after approval in chat. Add the system files of your own brain.
+#
+# !skills/_improvements/friction-log.md
+# skills/*
+# scripts/*
+# githooks/*
+# .github/*
+# CLAUDE.md
+# memory/CLAUDE.md
+# daily-log/CLAUDE.md
+# operators/CLAUDE.md

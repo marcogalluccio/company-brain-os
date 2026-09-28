@@ -19,7 +19,23 @@ operator decides, diff by diff.
 
 `/skill-improve <skill-name>`, e.g. `/skill-improve sync`. If the name is
 omitted, rank skills by number of open friction-log entries and ask which
-one to take.
+one to take. The count reads the open section only (above `## Archive`)
+and flags entries whose skill name matches no folder under `skills/`;
+misfiled open entries are surfaced by the Step 1 archive check, not ranked
+here:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+awk '/^## Archive/{exit} /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /{print}' skills/_improvements/friction-log.md \
+  | sed -E 's/^## [0-9-]+ · ([^ ]+) · .*$/\1/' | sort | uniq -c | sort -rn \
+  | while IFS= read -r line; do
+      name="$(printf '%s\n' "$line" | sed -E 's/^ *[0-9]+ //')"
+      if [ -d "skills/$name" ]; then echo "$line"; else echo "$line   OWNERLESS (no skills/$name/)"; fi
+    done
+```
+
+An `OWNERLESS` line is not a skill to improve; it is an entry to route
+(Step 1, "Ownerless entries"). Present those separately from the ranking.
 
 ## Workflow
 
@@ -30,11 +46,37 @@ one to take.
   any supporting file it references, if relevant to the friction.
 - Read `skills/_improvements/friction-log.md` and keep only the **open**
   entries for that skill: entries above the `## Archive` marker whose header
-  names the skill.
+  names the skill. Open is defined by the entry, not by its position: an
+  entry with no `consumed:` line is open wherever it sits. Check the archive
+  for misfiled ones, and treat any it finds as open, saying so to the
+  operator:
+
+  ```bash
+  H="$(awk '/^## Archive/{a=1} a' skills/_improvements/friction-log.md | grep -cE '^## [0-9]{4}-[0-9]{2}-[0-9]{2} ')"
+  C="$(awk '/^## Archive/{a=1} a' skills/_improvements/friction-log.md | grep -c '^consumed:')"
+  [ "$H" = "$C" ] && echo "archive ok: $H entries, all consumed" || echo "MISFILED: $H archived entries, $C consumed lines; the difference is open"
+  ```
+
+- **Ownerless entries.** An entry whose skill name matches no folder under
+  `skills/` (a cross-skill pattern, an external plugin, the harness) is
+  reached by no `/skill-improve <name>` run. When you meet one, route it to
+  exactly one of three places and say which: (a) a pattern that recurs
+  across skills becomes a class in `skills/_improvements/known-patterns.md`,
+  plus one line citing that class from an executable step of every skill it
+  touches, because a note no step opens closes no loop; (b) an entry whose
+  tag names another skill of the suite is refiled under that skill's name;
+  (c) a cause outside the repo is archived as not fixable in-repo, with the
+  substitute habit written in its `consumed:` line. The rules are in
+  `docs/SKILL-MAINTENANCE.md` section 5.
 
 ### 2. Diagnose
 
 - Group the open entries by pattern: same step, same recurring trigger.
+  Then open `skills/_improvements/known-patterns.md` and check every group
+  against its classes; an entry that already carries a `pattern:` line
+  names its class. A group that matches a class is a suite-wide pattern,
+  not a defect of this one skill: the proposal names every skill the class
+  touches, and the fix is usually the same line in each.
 - A recurring pattern outranks a one-off; say so explicitly and rank
   patterns above isolated entries.
 - No open entries for that skill: say so and stop. No proposal without
@@ -59,8 +101,12 @@ diff by diff.
 
 - For each accepted proposal, edit the SKILL.md with a targeted edit, never
   a full rewrite of the file.
-- Move the consumed entries from the open section to below the `## Archive`
-  marker in the friction-log, noting the date and what changed.
+- Close each consumed entry by appending one line to it,
+  `consumed: YYYY-MM-DD · <what changed, one line>`, then move the whole
+  entry from the open section to below the `## Archive` marker. The line is
+  the marker of a closed entry; the move is housekeeping. Never move an
+  entry without the line, and never add the line to an entry whose change
+  was not applied.
 - If the team routes structural work through feature branches (see
   `docs/GOVERNANCE.md` step 2 if the team has adopted it), skill edits
   belong on one, not on a direct commit to main.

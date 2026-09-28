@@ -1,0 +1,75 @@
+# Sensitive-path tripwire (docs/GOVERNANCE.md step 3).
+#
+# Detection and notification only, never an automatic revert: when a push to
+# main touches a path in .github/sensitive-paths.txt and the pushing account
+# is not a sensitive owner in operators/, it opens a GitHub issue. Inert while
+# the path list has no active pattern. `workflow_dispatch` is a dry run that
+# only proves the workflow is alive.
+name: sensitive-tripwire
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  tripwire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "hit=dry-run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          bash scripts/sensitive-tripwire-detect.sh --before "$BEFORE" --after "$AFTER" --actor "$ACTOR" > report.txt
+          cat report.txt
+          echo "hit=$(sed -n 's/^hit=//p' report.txt)" >> "$GITHUB_OUTPUT"
+          echo "anomaly=$(sed -n 's/^anomaly=//p' report.txt)" >> "$GITHUB_OUTPUT"
+          {
+            echo "files<<REPORT_EOF"
+            sed -n '/^files:$/,$p' report.txt | tail -n +2
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue
+        if: steps.detect.outputs.hit == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+          FILES: ${{ steps.detect.outputs.files }}
+          ANOMALY: ${{ steps.detect.outputs.anomaly }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          BODY="$(printf '%s\n' \
+            "Actor: @${ACTOR}" \
+            "" \
+            "Sensitive paths (.github/sensitive-paths.txt) in this push:" \
+            "${FILES:-(none: the hit is the anomaly below)}" \
+            "" \
+            "${ANOMALY:+Anomaly: ${ANOMALY}}" \
+            "Run: ${RUN_URL}" \
+            "" \
+            "Nothing was reverted: history is intact. A sensitive owner decides whether to keep, amend, or revert.")"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Tripwire: sensitive paths pushed to main by @${ACTOR}" \
+            --body "$BODY"
+
+      - name: Dry-run confirmation
+        if: steps.detect.outputs.hit == 'dry-run'
+        run: |
+          echo "Tripwire dry run: the workflow is alive and can reach this repository."

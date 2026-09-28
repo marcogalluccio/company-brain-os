@@ -1,6 +1,6 @@
 # Company Brain OS
 
-A shared company brain for small teams, powered by Claude Code and GitHub.
+The open-source company brain for AI agents.
 
 A private repo becomes your team's operational memory: what's active, what happened,
 who owns it, readable cold by any operator or agent that opens the repo. No app to
@@ -12,7 +12,7 @@ is the interface.
 Small teams, 2 to 5 operators, who want a shared operational memory that survives
 turnover instead of living in one person's head, one person's notes app, or one
 person's chat history. Beyond 5 operators, the shared-context model needs
-partitioning, which is out of scope for v1.0.0 and on the roadmap.
+partitioning, which is out of scope for now and on the roadmap.
 
 Working alone? The multi-operator scaffolding here (an `operators/` registry,
 per-operator daily logs, an offboarding checklist) is overhead you don't need. Use the
@@ -28,13 +28,13 @@ solo sibling instead: [big-brain-os](https://github.com/marcogalluccio/big-brain
 - **A daily git cycle.** Sync at the start of a session, work, debrief at the close: log
   what happened, update memory, commit, push. Work lands on `main` every session by
   default; branch protection and review gates are opt-in, never required.
-- **A 15-skill suite.** Guided Claude Code flows that turn the loop above, and the
+- **A 14-skill suite.** Guided Claude Code flows that turn the loop above, and the
   handful of things every operator does repeatedly, into commands instead of
   remembered process. See the matrix below.
 
 ## The skills suite
 
-The matrix below describes the 15 skills this template ships with. Every skill is
+The matrix below describes the 14 skills this template ships with. Every skill is
 optional: the core loop (sync, work, debrief) is markdown and git, and works whether
 or not you ever install one.
 
@@ -47,7 +47,6 @@ or not you ever install one.
 | `/html-preview` | Life cycle | Any setup |
 | `/memory-checkup` | Life cycle | Any setup |
 | `/skill-improve` | Life cycle | Any setup |
-| `/eod-review` | Life cycle | Any setup |
 | `/pr-review` | Governance | Inert until `docs/GOVERNANCE.md` is adopted |
 | `/ship` | Governance | Inert until `docs/GOVERNANCE.md` is adopted |
 | `/system-checkup` | Governance | Partially useful without it: the memory and structure checks run on any setup, the git-layer checks need it |
@@ -56,17 +55,20 @@ or not you ever install one.
 | `/meeting-debrief` | Extras | Any setup, transcript-first; an MCP connector for a meeting-notes tool is an optional extra for auto-fetch |
 | `/sparring` | Extras | Any setup |
 
-Eight life cycle skills work on any setup, no matter how small the team. Three
+Seven life cycle skills work on any setup, no matter how small the team. Three
 governance skills only do something once you adopt `docs/GOVERNANCE.md`; until then
 they are dead weight sitting in `skills/`. Four extras round out the suite.
+
+How the suite stays small as it learns (reference folders, friction-log hygiene,
+retiring a skill): `docs/SKILL-MAINTENANCE.md`.
 
 ### Dependencies
 
 | Tool | Needed by |
 | --- | --- |
-| git | Everything. The only hard requirement. |
-| `gh` CLI | The governance pack (`/pr-review`, `/ship`, and the git-layer checks in `/system-checkup`). |
-| Python 3 | Only if you adopt the advanced memory layer (`docs/ADVANCED.md`); the core loop needs none of it. |
+| git 2.31 or later, and bash | Everything: the daily loop is git, and the engine behind the debrief is a bash script (`scripts/`). The bash that ships with macOS is enough. The debrief's worktree detection needs `git rev-parse --path-format`, added in git 2.31. |
+| `gh` CLI | The governance pack (`/pr-review`, `/ship`, the proposal pull requests of `/session-debrief`, and the GitHub half of `/system-checkup`). |
+| Python 3 | The advanced memory layer (`docs/ADVANCED.md`) and the `CLAUDE.md` drift scanner in `/system-checkup`; the core loop needs none of it. When present, `/session-debrief` also uses it to measure the index budget before writing. |
 | MCP connectors (optional) | `/meeting-debrief`'s auto-fetch path. Everything else needs none. |
 
 ## Quickstart
@@ -88,9 +90,10 @@ The core loop above is the whole workspace. Nothing else is required. Two indepe
 growth paths sit on top of it, and you can adopt either, both, or neither:
 
 - `docs/GOVERNANCE.md`: a heavier git layer, branch protection, feature branches plus
-  `/ship`, CODEOWNERS, for when the direct-push default needs guardrails.
+  `/ship`, CODEOWNERS with a sensitive-path list, a local hook and a CI tripwire, for
+  when the direct-push default needs guardrails.
 - `docs/ADVANCED.md`: a heavier memory layer, salience scoring, a machine-generated
-  index, for when `memory/MEMORY.md` outgrows a flat list. Ships with v1.0.0.
+  index, for when `memory/MEMORY.md` outgrows a flat list.
 
 ## Siblings
 

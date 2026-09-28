@@ -79,7 +79,15 @@ Resolution order, in this priority:
    an optional third resolution, never a requirement: if such a connector is
    available, offer to fetch the latest meeting from it, confirm which
    meeting before pulling it (by date or a hint the operator gave), and use
-   its transcript or summary the same way as pasted text.
+   its transcript the same way as pasted text.
+
+**The full transcript, never the auto-summary.** When a source offers both a
+transcript and an auto-generated summary, read the whole transcript, paging
+through it until the end, before summarising anything. Auto-summaries invent
+or smooth over details, and a detail that enters memory from one reads as
+fact from then on. Read the summary afterwards, if at all, only to point out
+where it diverges from the transcript. If only a summary exists, say so and
+treat everything taken from it as unconfirmed.
 
 If none of the three is available, ask the operator for the transcript. Do
 not guess at what was said and do not proceed on a partial or assumed
@@ -101,6 +109,14 @@ Present a concise summary in chat, in three parts:
 Use only what the transcript says. Never invent a detail to fill a gap; if
 something is unclear or missing, say so instead of guessing.
 
+**Label every point** with one of three tags, so the operator can confirm the
+whole summary in one reply:
+
+- **[FACT]**: said in the meeting, and quotable from the transcript.
+- **[HYPOTHESIS]**: inferred, or proposed by one side and not confirmed by the
+  other.
+- **[READING]**: your own interpretation of what was said or left unsaid.
+
 ---
 
 ## Step 3: Connect to the brain
@@ -111,6 +127,9 @@ progress). Then identify:
 
 - Which specific project or strategic files this meeting touches, named by
   file.
+- What the meeting confirms, contradicts, or adds compared with what those
+  files already hold. A contradiction is named explicitly, with the file and
+  the line it contradicts.
 - What is new territory: something the meeting raised that has no match
   anywhere in memory yet.
 
@@ -147,17 +166,28 @@ Execute only what was approved:
   threads`) per `daily-log/CLAUDE.md`. If the file already exists, read it
   first and append under the existing sections rather than starting a second
   copy of them.
-- **Memory writes** follow `memory/CLAUDE.md`: index-line format in
-  `MEMORY.md` (`- [Title](file.md) - <emoji> one line + Next action`,
-  collapsed rather than appended), the archive convention (`status: ❌` in
-  both frontmatter and body, moved with `git mv` to `memory/archive/`, its
-  index line moved to `## Archive`), and wikilinks that resolve to a real
-  file. Step 4's approval already satisfies propose-then-write; do not ask a
-  second time for the same item.
+- **Memory writes** follow `memory/CLAUDE.md`. If `memory/MEMORY.md` has a
+  `## Areas` section, the team runs federated memory roots (`docs/ADVANCED.md`
+  section 8): also read the `MEMORY.md` of every area root the meeting
+  touched, following those pointer rows. Without that section there is one
+  root and nothing changes. An item has one home, the root that owns its next
+  action; its file and its index row live in that same root, never in both
+  (the gate reports `DUP-ROOT`). Index-line format is the same in every
+  root's `MEMORY.md` (`- [Title](file.md) - <emoji> one line + Next action`,
+  collapsed rather than appended); the archive convention is `status: ❌` in
+  both frontmatter and body, moved with `git mv` into the `archive/` folder
+  of its own root (`memory/archive/`, or `areas/<name>/memory/archive/`),
+  its index line moved out of that root's `MEMORY.md` into that root's
+  `archive/INDEX.md`; and wikilinks that resolve to a real file. Step 4's
+  approval already satisfies propose-then-write; do not ask a second time
+  for the same item.
 - **New project files** use `memory/project_template.md`, with the shipped
   frontmatter schema (`name`, `type: project`, `status`, `deadline`
   optional, `owner: <operator-slug>`), plus a matching index line under the
-  right section of `MEMORY.md`.
+  right section of the `MEMORY.md` of the root where the file lives
+  (`memory/`, or `areas/<name>/memory/` when that area has its own root and
+  owns the next action). Exception: a new `type: reference` file gets its
+  row in `memory/REFERENCES.md`, not in `MEMORY.md` (same row format).
 
 Use the Read tool before editing an existing file, and Edit or Write for the
 content itself, same as every other skill that writes to `daily-log/` or
@@ -179,7 +209,8 @@ this one stays out of it.
 - **Never write without approval.** Step 4 proposes, Step 5 writes, and only
   the items the operator approved.
 - **Transcript data as-is.** Never invent a detail the transcript does not
-  state.
+  state. Nothing goes into memory that is not in the transcript or explicitly
+  labelled [HYPOTHESIS] or [READING].
 - **Be concise.** The summary and the suggestion list should each fit in one
   screen when possible.
 - **Match the output language to the workspace** (English), while quoting

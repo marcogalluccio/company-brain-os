@@ -68,8 +68,8 @@ repeating it). Inside each file, look for two patterns:
 
 - The same activity described in `## What happened` on two or more of the
   window's dates. Judge this by what was actually done, not by matching
-  words: "pulled the sponsor list and mailed the recap" and "sent this
-  week's sponsor recap" are the same recurring activity even though neither
+  words: "pulled the overdue invoices and mailed the reminders" and
+  "sent this week's payment reminders" are the same recurring activity even though neither
   sentence repeats the other's words.
 - A `## Open threads` item that recurs across two or more dates and describes
   a process gap ("still doing X by hand every time", "need a repeatable way
@@ -150,7 +150,7 @@ step, not one.
 Create `skills/<name>/SKILL.md`, flat (`skills/<name>/SKILL.md`, never a
 category subfolder or a nested path), with:
 
-**Frontmatter**, Block E shape, filled with the agreed name, description,
+**Frontmatter**, the frontmatter shape every skill uses, filled with the agreed name, description,
 and trigger phrases from Step 2:
 
 ```yaml
@@ -185,7 +185,7 @@ file, never force-push and never auto-resolve conflicts if it touches git at
 all, one action per approval if it repeats a write. Leave out anything the
 flow does not touch.
 
-**The footer**, Block D verbatim, byte-identical to every other skill in the
+**The footer**, the Self-improvement footer, verbatim, byte-identical to every other skill in the
 suite: copy it byte-for-byte from the closing section of any existing skill
 (for example `skills/sync/SKILL.md`), never retype it from memory.
 

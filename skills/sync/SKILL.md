@@ -97,8 +97,8 @@ continue.
 
 If the branch is not `main`, say so and stop after Step 3's report. Rebasing a feature
 branch onto a moved `origin/main` is a deliberate decision, not a hygiene routine, and
-the branch is closed by `/ship` (see `docs/GOVERNANCE.md`). The integration block in
-Step 4 refuses to run off `main` on purpose.
+the branch is closed by `/ship` (see `docs/GOVERNANCE.md`). The engine Step 4 delegates
+to refuses to run off `main` on purpose (exit 3).
 
 ---
 
@@ -143,7 +143,7 @@ dangling link has to reach the "broken" message, not the "not registered" one.
 ## Step 3: Fetch and report
 
 ```bash
-git fetch origin --prune || { echo "FETCH FAILED: could not reach origin; not proceeding."; exit 2; }
+git fetch origin --prune || { echo "FETCH FAILED: could not reach origin; not proceeding."; exit 50; }
 git log HEAD..origin/main --oneline | head -20
 ```
 
@@ -162,8 +162,11 @@ the network, and hiding it makes the next step lie. The guard on the fetch is wh
 that promise real, and it is not decoration: without it a failed fetch leaves
 `origin/main` pointing at whatever it knew hours or days ago, Step 4 computes
 `ahead=0 behind=0` against that stale ref, and the skill cheerfully reports "already up
-to date" to an operator who is a week behind. On `FETCH FAILED` (exit 2), tell the
-operator the fetch failed and that nothing was compared, then stop.
+to date" to an operator who is a week behind. On `FETCH FAILED` (exit 50), tell the
+operator the fetch failed and that nothing was compared, then stop. The code is the
+engine's own for the same marker (`skills/session-debrief/reference/push-outcomes.md`,
+exit 50): one marker, one code, so an agent that looks it up cannot land on the row of
+a different situation.
 
 ---
 
@@ -188,7 +191,8 @@ A fast-forward is enough, and `--ff-only` guarantees no merge commit can be inve
 If the tree is clean, run it directly:
 
 ```bash
-git pull --ff-only origin main
+cd "$(git rev-parse --show-toplevel)"
+scripts/git-locked git pull --ff-only origin main
 ```
 
 If the tree is dirty, check first whether the incoming commits touch the same files as
@@ -196,6 +200,7 @@ the uncommitted edits. Pulling on top of your own edits to the same file is how 
 gets lost:
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"
 DIRTY_LIST="${TMPDIR:-/tmp}/sync-dirty.$$"
 INCOMING_LIST="${TMPDIR:-/tmp}/sync-incoming.$$"
 git -c core.quotePath=false status --porcelain | grep -v "^??" | cut -c4- | sort -u > "$DIRTY_LIST"
@@ -208,7 +213,7 @@ if [ -n "$OVERLAP" ]; then
   echo "Nothing was pulled and nothing was stashed. Decide in chat."
   exit 30
 fi
-git pull --ff-only origin main
+scripts/git-locked git pull --ff-only origin main
 ```
 
 On `STOP` (exit 30), show the overlapping paths and let the operator choose: commit
@@ -221,203 +226,114 @@ No overlap means the pull cannot disturb the uncommitted edits, so it proceeds.
 
 ### Ahead only (ahead>0, behind=0)
 
-Local commits that never reached origin, typically a `DEFER` from an earlier debrief
-that could not push. Show them and propose the push:
+Local commits that never reached origin, typically a `DEFER` or a `PUSH-RACE` from an
+earlier debrief. Show them and propose the push:
 
 ```bash
 git log origin/main..HEAD --oneline
 ```
 
-Then, with the operator's ok:
+Then, with the operator's ok, push them through the engine's integrate-only mode,
+which pushes and verifies by content that every line they added or removed is
+reflected on `origin/main`:
 
 ```bash
-git push origin main
+cd "$(git rev-parse --show-toplevel)"
+scripts/git-locked scripts/debrief-push.sh --integrate-only
 ```
 
 Nothing to integrate: origin has not moved, so this is a plain fast-forward on the
-remote side.
+remote side, and the expected outcome is exit 0 with `PUSHED`. Any other exit is read
+exactly as in the divergent case below: exit 75 is the lock held by another live
+session, and everything else is looked up in
+`skills/session-debrief/reference/push-outcomes.md`.
 
 ### Ahead and behind (both >0): the histories diverged
 
-Both sides moved. Before doing anything, check whether this is the expected kind of
-divergence: after a debrief that ended in `PUSHED-VIA-WORKTREE`, local `main` still
-points at the pre-rebase commits while origin already carries the same patches under
-different hashes. That state is expected and benign. The rebase drops the duplicated
-patches by itself and the copy realigns with no conflict. Verify by content, not by
-hash: identical subjects with different SHAs in `git log origin/main..HEAD` and
-`git log HEAD..origin/main` is the signature.
+Both sides moved. This is one of two very different situations, and the difference is
+invisible in the counts:
 
-Either way the integration goes through the block below, which is the debrief engine's
-integration half (the same block, minus its staging lines, because here the local
-commits already exist). It re-checks its own preconditions, so it is safe to run even
-if something changed between Step 4 and now: it refuses to run off `main`, refuses to
-run on top of an unfinished merge or rebase, and picks its path from the state it finds.
-A clean tree rebases in place. A dirty tree is integrated through a temporary worktree
-instead, so a rebase never touches work in progress in the main tree.
+1. **After a debrief that ended in `PUSHED-VIA-WORKTREE`.** Local `main` still points
+   at the pre-rebase commits; origin carries the same work under different hashes.
+   Their content is on origin. Rebasing them is the wrong move: the replayed patches
+   are not identical (the rebase in the worktree changed their context), so git does
+   not drop them as duplicates, it replays them as spurious conflicts, and "keep mine"
+   there regresses what others wrote.
+2. **Local commits that never reached origin** (a `DEFER`, a `PUSH-RACE`, a network
+   failure). Their content is not on origin. They must be integrated.
 
-**Ask the operator before running it.** This block does not only integrate: it also
-pushes the local commits to the shared `main`, which is a write to everyone's brain and
-not something a hygiene routine gets to decide on its own. Say what will happen, in one
-sentence, naming the commits it will publish, and wait for the ok, exactly like the
-ahead-only branch above. The only pre-authorized push in this brain is the one
+Decide by content, never by hash or subject. The verifier answers exactly this
+question for every line a commit added or removed, and it also writes a
+remote-tracking ref (it fetches origin internally), so it goes through the lock like
+every other git call here.
+
+Ask it one commit at a time, not once for the whole fork-point range. The commit is
+the unit a rebase drops or replays, so it is the unit the answer has to hold for; and
+the verifier's refusal to confirm what it cannot read by content (a binary file, a
+mode-only change, a blank line, a removed line that repeats in its file) then falls on
+that commit alone, instead of being satisfied by a checkable neighbour in the same
+range. The loop runs inside one lock, so every commit is compared against the same
+state of origin, and it names the commits rather than just counting them:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+scripts/git-locked bash -c '
+  UNVERIFIED=""
+  for c in $(git rev-list --reverse "$(git merge-base HEAD origin/main)"..HEAD); do
+    echo "=== $(git log -1 --format="%h %s" "$c")"
+    scripts/debrief-verify.sh "$c^" "$c" - || UNVERIFIED="$UNVERIFIED $c"
+  done
+  [ -z "$UNVERIFIED" ] && echo "ALL VERIFIED: every local commit is reflected on origin/main" \
+                       || echo "NOT ALL VERIFIED:$UNVERIFIED"
+'
+```
+
+**`ALL VERIFIED`** (every commit reported `VERIFY OK`): case 1. Each local commit's
+content is already on origin, so nothing is lost by moving off them. Propose the
+realignment and run it with the operator's ok:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+scripts/git-locked git reset --keep origin/main
+```
+
+`--keep` preserves uncommitted work on files the move does not touch, and refuses
+(changing nothing) when it would touch one; on a refusal, follow "Realign refused" in
+`skills/session-debrief/reference/push-outcomes.md`. Never rebase here.
+
+**`NOT ALL VERIFIED`** (one commit short of the whole range is enough to land here):
+case 2, or a mix. The commits it names
+carry work origin does not have, or work this check could not read either way; neither
+is something to discard, and `reset --keep` would discard both alike. Integrate instead,
+through the engine in integrate-only mode, which rebases in place on a clean tree or
+through a temporary worktree on a dirty one, pushes, and verifies again:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+scripts/git-locked scripts/debrief-push.sh --integrate-only
+```
+
+**Ask the operator before running it.** It pushes to the shared `main`, which is a
+write to everyone's brain and not something a hygiene routine decides on its own. Say
+what will be published, naming the commits (`git log origin/main..HEAD --oneline`),
+and wait for the ok. The only pre-authorized push in this brain is the one
 `/session-debrief` makes at the end of its own run (see the carve-out in the root
 `CLAUDE.md` rules); sync is not covered by it.
 
-```bash
-set -e
-cd "$(git rev-parse --show-toplevel)"
-[ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || { echo "GUARD: HEAD is not on main"; exit 3; }
-GD="$(git rev-parse --git-dir)"
-if [ -e "$GD/MERGE_HEAD" ] || [ -d "$GD/rebase-merge" ] || [ -d "$GD/rebase-apply" ]; then
-  echo "PRE-FLIGHT FAIL: a merge or rebase is already in progress; resolve it first"; exit 2
-fi
-if ! git remote get-url origin >/dev/null 2>&1; then
-  echo "LOCAL-ONLY: no origin remote configured; commit kept locally"; exit 0
-fi
-git fetch origin main --quiet
-BEHIND="$(git rev-list --count HEAD..origin/main)"
-if [ "$BEHIND" -gt 0 ]; then
-  DIRTY="$(git -c core.quotePath=false status --porcelain | grep -v "^??" | cut -c4-)"
-  if [ -n "$DIRTY" ]; then
-    WTB="$(mktemp -d)"; WT="$WTB/wt"
-    if ! git worktree add --detach --quiet "$WT" HEAD; then
-      rm -rf "$WTB"; echo "DEFER: could not create a temporary worktree; push postponed, commit kept locally"; exit 10
-    fi
-    RES=10
-    if git -C "$WT" rebase --quiet origin/main >/dev/null 2>&1; then
-      if git -C "$WT" push origin HEAD:main; then
-        RES=0; echo "PUSHED-VIA-WORKTREE: your work is on origin; the main tree was not touched and realigns on the next clean sync"
-      else
-        RES=40; echo "PUSH-RACE: origin advanced between fetch and push; commit safe locally, retry at the next debrief or /sync"
-      fi
-    else
-      git -C "$WT" rebase --abort >/dev/null 2>&1 || true
-      echo "DEFER: real conflict with origin; commit kept locally, resolve at the next clean sync"
-    fi
-    git worktree remove --force "$WT" >/dev/null 2>&1 || true
-    git worktree prune >/dev/null 2>&1 || true
-    rm -rf "$WTB"
-    exit $RES
-  fi
-  if ! git pull --rebase origin main; then
-    echo "CONFLICT: rebase stopped on a conflict; resolve in chat, inside the rebase"; exit 20
-  fi
-fi
-git push origin main
-echo "PUSHED"
-```
-
-On a clean tree this is exactly `git pull --rebase origin main` followed by the push of
-whatever was local. On a dirty tree it is the worktree integration. Read the outcome
-table before running it, so the result reaches the operator as a sentence rather than
-as an exit code.
+The outcome of `--integrate-only` is read exactly like the debrief's: exit 0 with
+`PUSHED` or `PUSHED-VIA-WORKTREE` is done (with the same `LOCAL-MAIN-DIVERGED`
+follow-up when printed); exit 75 is the lock held by another live session (retry on a
+later tool turn); any other exit is looked up in
+`skills/session-debrief/reference/push-outcomes.md`, whose path the script prints.
+Exit 20 and 21 (a stopped rebase, in the main tree or in the temporary worktree) are
+resolved inside the rebase, following that reference: show both sides, the operator
+chooses, never silent, never `--skip` as the fallback of a failed `--continue`, never
+a bare `rebase --abort` on the main tree.
 
 ### Neither (ahead=0, behind=0)
 
 Report it and stop: "In sync with origin/main." Also worth one line if the tree is
 dirty, since uncommitted work is invisible to teammates until a debrief commits it.
-
-### Outcomes
-
-These exit codes are the only legitimate results of the integration block, plus the one
-Step 3 can produce on its own. Anything else (a `1`, a `127`, a shell syntax error) is an
-anomaly in how the block was run, not a result to look up here: stop, investigate the
-command itself, and do not map it onto one of these rows.
-
-| Exit | Marker | What to tell the operator |
-|---|---|---|
-| 0 | `PUSHED` | Aligned. The local commits are on origin and this copy matches `main`. |
-| 0 | `PUSHED-VIA-WORKTREE` | The local commits are on origin and the working tree was never touched, so work in progress stayed intact. Local `main` still points at the pre-rebase commits and realigns by itself at the next clean pass, when the rebase drops the patches that are already upstream. Verify by content, not by hash. No action needed. |
-| 10 | `DEFER` | Integration postponed: either a real conflict with what origin now holds, or a temporary worktree could not be created. Nothing was lost, the local commits are intact. Retry at the next clean moment, when the tree has no uncommitted work. |
-| 40 | `PUSH-RACE` | Someone pushed in the seconds between the fetch and the push, so the push was refused. Nothing is lost and nothing gets forced. Rerun the sync. Two in a row is worth mentioning: it means sessions are closing on top of each other. |
-| 20 | `CONFLICT` | The rebase is stopped on the conflict, not aborted, and it is waiting for a decision. Follow the conflict protocol below. First check `git status --porcelain` for unmerged (`UU`) paths. If there are none and `.git/rebase-merge` does not exist, no rebase ever started: this is an untracked-file collision (a local untracked file blocks an incoming file at the same path). The conflict protocol does not apply; decide in chat (typically move the local file aside with the operator's ok, then rerun). |
-| 2 | `PRE-FLIGHT FAIL` | A merge or rebase was already in progress before this run, probably left stopped by an earlier session. Nothing was changed. Show it to the operator: an unfinished integration is a state to understand, not to push past. |
-| 3 | `GUARD` | `HEAD` is not on `main`, so the block declined to run. Usually a feature branch (see Step 1). Check for a stopped rebase too (`git status`), because a rebase in progress leaves `HEAD` detached and trips this guard first. |
-| 0 | `LOCAL-ONLY` | No `origin` remote. Step 1 normally catches this first; if it appears here, the remote was removed mid-run. Finish `SETUP.md`. |
-| 2 | `FETCH FAILED` | From Step 3, not from the block: origin could not be reached, so nothing was fetched and nothing was compared. Report the git error as it came out and stop. Do not read the ahead/behind counts, and do not say "up to date": both would be measured against a stale `origin/main`. |
-
-If a push fails on a network error, the local commits stay exactly where they are and
-there is no silent retry.
-
-### Conflict protocol (inside the rebase, never silent)
-
-Exit 20 means the rebase is paused mid-flight with conflict markers in the tree. It is
-not broken and nothing is lost; it is waiting for a human decision. Work through it
-now, in this session. This is the same protocol as `session-debrief` Step 5, and the
-two blocks below are byte-identical to the ones shipped there on purpose: there is one
-way to close a conflicted rebase in this brain, not two.
-
-1. Run `git status --porcelain` to list the conflicted files. Show the operator both
-   sides in chat: yours is `git show REBASE_HEAD:<file>`, theirs is
-   `git show HEAD:<file>` (during a rebase, `HEAD` is the origin/main side, which
-   reads backwards until you have seen it once).
-2. The resolution is the operator's explicit choice: mine, theirs, or both merged.
-   Never resolve silently, and never pick for them. For a collision between two index
-   lines in `memory/MEMORY.md`, the answer is almost always the union: both lines are
-   true, keep both. The recipe is in `memory/CLAUDE.md` under "When two debriefs
-   collide".
-3. Apply the resolution with the Edit tool, removing the conflict markers, then close
-   the rebase with a targeted `add`. Never `git add -A`, never `commit -a`, never
-   `--amend`: each of those sweeps in files this session did not write.
-
-```bash
-set -e
-git add <only-the-conflicted-files>
-git update-index -q --ignore-submodules --refresh || true
-if ! git diff-files --quiet; then
-  echo "STOP: unstaged changes present in the tree; not forcing, not aborting. Decide in chat."; exit 30
-fi
-GIT_EDITOR=true git rebase --continue
-git push origin main
-```
-
-   `git rebase --continue` refuses to run while any tracked file is unstaged, and
-   `git rebase --abort` would hard-reset those edits out of existence. So when the
-   guard prints `STOP` (exit 30), the correct move is neither: leave the rebase
-   stopped, tell the operator which files are dirty, and decide in chat.
-
-   If the continue reports that the commit became empty, because the resolution took
-   "theirs" in full and the commit held nothing else, finish with
-   `GIT_EDITOR=true git rebase --skip && git push origin main`.
-
-4. If the continue stops on another conflict, repeat from step 1. Two retries at most,
-   then take the safe abort below and report a `DEFER`.
-5. If there is no immediate resolution (the operator has stepped away, the case is
-   ambiguous), take the safe abort at once and report a `DEFER`. Never leave a rebase
-   suspended past the end of the session: the next session's pre-flight will refuse to
-   run, and the operator will not remember why.
-
-### Safe abort
-
-This is the only permitted way to abort a rebase in this skill. A bare
-`git rebase --abort` does a hard reset that destroys **every** unstaged change in the
-tree, including in-progress work that has nothing to do with the conflict. Guard
-first. The guard deliberately excludes the unmerged conflict paths themselves, since
-those are exactly what the abort is supposed to reset, and counts everything else:
-
-```bash
-set -e
-git update-index -q --ignore-submodules --refresh || true
-# git diff-files lists an unmerged path twice, once as U and once as M, so
-# filtering on U alone would still leave the conflict looking dirty and the guard
-# would refuse every abort. Tag the conflicted paths and drop them explicitly.
-DIRTY="$( { git ls-files --unmerged | cut -f2 | sed 's/^/U /'
-            git diff-files --name-only | sed 's/^/D /'; } \
-          | awk '{p=substr($0,3)} $1=="U"{u[p]=1;next} !(p in u){print p}' | sort -u )"
-if [ -n "$DIRTY" ]; then
-  echo "STOP: aborting would destroy unstaged changes in:"; echo "$DIRTY"
-  echo "Save that content first (explicit decision in chat), then rerun."; exit 30
-fi
-git rebase --abort
-echo "DEFER: rebase aborted cleanly, local commit kept"; exit 10
-```
-
-On `STOP` (exit 30), the rebase stays exactly where it was: nothing was forced,
-nothing was thrown away. Get the dirty content to safety first (whoever wrote it knows
-what it is), then rerun the abort or the continuation.
-
-An abort-on-conflict that skips this guard is the single most expensive mistake this
-skill can make, which is why the plain form appears nowhere in it.
 
 ---
 
@@ -441,9 +357,11 @@ work that is sitting safely in a local commit.
   `PUSH-RACE`, never. If a push is refused, that refusal is protecting a teammate's
   commit.
 - **Never auto-resolve conflicts.** Report them, show both sides, let the operator
-  choose.
+  choose. The engine's `autoTake` team option is the one declared exception, off by
+  default and declared in its output whenever it fires.
 - **Never abort a rebase without the guard.** A bare `git rebase --abort` throws away
-  every unstaged change in the tree.
+  every unstaged change in the tree. The guarded form lives in
+  `skills/session-debrief/reference/push-outcomes.md` (exit 20).
 - **Never stash, checkout, or restore over uncommitted work.** If it is in the tree
   and you did not write it, leave it alone.
 - **No silent retries.** A network error is reported once, as it came out.

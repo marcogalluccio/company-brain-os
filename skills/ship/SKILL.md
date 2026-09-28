@@ -19,7 +19,7 @@ branch can live for days and close with a single PR whenever it's ready.
 
 ## Step 0: Resolve the operator and detect state
 
-Block A, byte-identical from `skills/session-debrief/SKILL.md`:
+The operator-resolution block, identical to `skills/session-debrief/SKILL.md`:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -60,14 +60,59 @@ CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 echo "current=$CURRENT_BRANCH"
 ```
 
-**On `main`:** stop. Say:
+`/ship` takes an optional argument, the branch to ship (`/ship <branch>`).
+The argument wins over the current directory: when it is given, the branch
+is that one wherever the shell is, never the branch of the cwd.
+
+**With an argument.** Find the worktree that has the branch checked out and
+work from there without asking: naming the branch was the choice.
+
+```bash
+TARGET_BRANCH="<the branch named in the invocation, as literal text>"
+# porcelain prints "worktree <path>" two lines above "branch refs/heads/<name>";
+# grep -Fx matches the branch line literally (a "." in the name is not a
+# wildcard), then grep/cut pull the path rather than awk, so the snippet
+# holds no positional parameters; cut -f2- keeps a path with spaces whole
+WT_PATH=$(git worktree list --porcelain | grep -B2 -Fx "branch refs/heads/$TARGET_BRANCH" | grep "^worktree " | cut -d" " -f2-)
+echo "worktree=${WT_PATH:-none}"
+```
+
+- `WT_PATH` found: `cd "$WT_PATH"`, recompute `CURRENT_BRANCH`, say
+  "Shipping `<branch>` from `<path>`", and continue to Step 1. If
+  `$TARGET_BRANCH` matches `*/proposals-*` (a proposal pull request from
+  `skills/session-debrief/reference/split-paths.md` Procedure B), stop
+  instead: "`<branch>` is a proposals branch; it already gets its own PR
+  from that flow. Use `/pr-review` to review it, not `/ship`."
+- The branch exists (`git rev-parse --verify --quiet "refs/heads/$TARGET_BRANCH"`
+  succeeds) but no worktree has it: stop and ask. Shipping means checking the
+  branch out somewhere, and the main tree stays on `main`; offer
+  `git worktree add <path> <branch>` and rerun.
+- The branch does not exist: stop. "Branch `<name>` not found. Feature
+  branches checked out in worktrees: <the `git worktree list` lines that are
+  not `main` and not detached>."
+
+**Without an argument, on `main`:** do not stop empty-handed. The main tree
+stays on `main` in the daily flow, so the feature branch may well be ready in
+a worktree. Run `git worktree list`. If it shows worktrees on feature branches
+(exclude the main tree, any detached one, and any branch matching
+`*/proposals-*`, which belongs to the proposal pull request flow in
+`skills/session-debrief/reference/split-paths.md` Procedure B and already has
+its own PR), list them and **ask** which to ship; never move to one silently,
+the choice is the operator's when no argument was given:
+
+> "You're on `main` (the daily flow lands there through the debrief), but
+> there are feature branches in worktrees: <branch, path>. Ship one of these?
+> Name it, or rerun `/ship <branch>`."
+
+On the answer, `cd` into the chosen worktree, recompute `CURRENT_BRANCH`, and
+continue to Step 1. If there is no such worktree, stop:
 
 > "You're on `main`: the daily flow already lands there through the
-> debrief. `/ship` is only for feature branches (`docs/GOVERNANCE.md` step
-> 2)."
+> debrief, and there is no feature branch in a worktree. `/ship` is only for
+> feature branches (`docs/GOVERNANCE.md` step 2)."
 
-**On any other branch:** confirm this is the branch to ship before doing
-anything else:
+**Without an argument, on any other branch:** confirm this is the branch to
+ship before doing anything else:
 
 > "You're on `$CURRENT_BRANCH`. Ship this branch as a PR?"
 
@@ -79,12 +124,12 @@ Wait for confirmation.
 git status --short
 ```
 
-If there are uncommitted changes under `daily-log/` or `memory/`: offer to
-run a debrief first. `/session-debrief`'s branch guard commits those on the
-current branch when it isn't `main` (commit-only: no fetch, no rebase, no
-push), so running it here snapshots the work before the PR is opened. If the
-operator would rather not, say plainly that those changes will not be part
-of the PR.
+If there are uncommitted changes under `daily-log/` or `memory/`: they never
+belong to the PR. Offer to run a debrief first: from a feature branch in a
+worktree, `/session-debrief`'s branch guard commits only the branch's own work
+there and takes the daily log and memory to `main` from the main tree. If the
+operator would rather not, say plainly that those changes will not be part of
+the PR.
 
 If there are uncommitted changes outside `daily-log/` and `memory/`: state
 plainly that they stay out of the PR too. This skill never commits on the
@@ -133,6 +178,12 @@ EXISTING=$(gh pr list --head "$CURRENT_BRANCH" --state open --json number,url -q
   "The branch is behind main, but it already has an open PR, so I'm not
   rebasing (it would break the next push). The file-changed count below
   uses the three-dot diff so it doesn't include main's unrelated changes."
+  When `main` truly has to enter the branch (GitHub reports conflicts, or
+  the tests must rerun on the new `main`), the positive road is
+  `git merge origin/main` on the branch: it adds one merge commit, rewrites
+  no SHA, so the next push stays fast-forward, and the squash merge absorbs
+  it at the end. A force-push, `--force-with-lease` included, is never the
+  answer here without an explicit question in chat.
 - **If `$EXISTING` is empty (no PR yet):** offer a choice. "The branch is
   behind main by N commits. I can rebase onto `origin/main` first (needs a
   clean tree), or show the real payload with a three-dot diff without
@@ -179,7 +230,11 @@ it." Then, informational only, never run automatically: after the PR
 merges, `git worktree remove <path>` if the branch lived in one, then
 `git branch -D <branch>` to drop the local branch. `/pr-review`'s merge gate
 already deletes the remote branch (`--delete-branch`); these two are local
-cleanup only, and only worth mentioning, never worth doing here.
+cleanup only, and only worth mentioning, never worth doing here. One expected
+message on that path: if the merge prints `fatal: 'main' is already used by
+worktree`, the merge on GitHub already succeeded and the error is about the
+local checkout of `main` only; verify with `gh pr view <n> --json state`
+(expect `MERGED`) rather than rerunning the merge.
 
 ## Rules
 
@@ -190,7 +245,12 @@ cleanup only, and only worth mentioning, never worth doing here.
 - **Never auto-merges.** Merging happens through `/pr-review`, so the
   operator sees the diff first.
 - **Never force-pushes.** If the push is rejected because the remote
-  diverged, stop and ask; do not rebase and force past it.
+  diverged, stop and ask; do not rebase and force past it. When `main` has to
+  enter a branch with an open PR, merge it in (Step 2); a rebase of pushed
+  commits is never offered.
+- **Works from a worktree when the branch lives in one.** An explicit
+  `/ship <branch>` moves there without asking; on `main` without an argument,
+  the skill lists the feature worktrees and asks, never moves silently.
 
 ## Self-improvement
 

@@ -81,6 +81,10 @@ elif git fetch origin main --quiet; then
   AHEAD=$(git rev-list --count origin/main..HEAD)
   BEHIND=$(git rev-list --count HEAD..origin/main)
   echo "ahead=$AHEAD behind=$BEHIND"
+  if [ "$AHEAD" -gt 0 ] && [ "$BEHIND" -gt 0 ]; then
+    DUP=$(git cherry origin/main HEAD | grep -c '^-' || true)
+    echo "diverged: $DUP of $AHEAD ahead commit(s) are patch-identical to commits already on origin"
+  fi
 else
   echo "FETCH FAILED: could not reach origin; freshness unknown."
 fi
@@ -88,9 +92,18 @@ fi
 
 - `BEHIND > 0`: recommend running `/sync` before trusting this briefing. Local
   `memory/` is stale.
-- `AHEAD > 0`: note in the briefing that local `main` is ahead by N commits
-  (a deferred push from an earlier session, most likely), so the shared copy
-  does not have it yet.
+- `AHEAD > 0` and `BEHIND = 0`: note in the briefing that local `main` is
+  ahead by N commits (a deferred push from an earlier session, most likely),
+  so the shared copy does not have it yet.
+- `AHEAD > 0` and `BEHIND > 0`: local `main` has diverged, and "ahead" no
+  longer means "not on origin". Never report those commits as missing from
+  the shared copy. The `diverged:` line counts the ones git already
+  recognizes as duplicates of commits on origin: report them as "duplicates,
+  will drop on realign". The rest may well be on origin too, under different
+  hashes (the usual residue of a push through a temporary worktree), which
+  only a check by content can tell: recommend `/sync`, which verifies each
+  commit by content before proposing anything. Never recommend a rebase from
+  the briefing.
 - `FETCH FAILED`: say plainly that freshness could not be checked. Never treat
   a failed fetch as "up to date": that reads the last successful fetch's
   state, which may be hours or days old, as current.
@@ -101,17 +114,38 @@ This step is read-only. It never fetches to change anything, only to compare.
 
 ## Step 1: Read memory
 
-`memory/MEMORY.md` is the primary source. For every 🔴 or 🟠 row in it, read
+`memory/MEMORY.md` is the primary source. If it has a `## Areas` section, the team
+runs federated memory roots (`docs/ADVANCED.md` section 8): read every area
+`MEMORY.md` it points to as well, and treat their rows like the primary's. Without
+that section there is one index and nothing changes. For every 🔴 or 🟠 row, read
 the linked project file and pull its `## Status`, `## Next action`, and
 `deadline` frontmatter (if set). Skip `memory/*_template.md` and any file
 whose stem ends in `_example`, per the shipped convention.
 
 **Advanced layer, if adopted.** If the team has adopted `docs/ADVANCED.md`,
-project files carry `salience` and `last_touched` frontmatter fields; recompute
-salience live for every project using the deterministic formula there
-(read-only, write nothing), rank the top 5, and open the briefing with a
-"Top 5 now" list ahead of the Today section. If those fields are not present,
-the team has not adopted the layer: skip this silently, with no mention of it
+project files carry `salience` and `last_touched` frontmatter fields. Rank
+the top 5 by live salience and open the briefing with a "Top 5 now" list
+ahead of the Today section. Take the numbers from the sweep script when it
+is available (read-only, writes nothing):
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/salience_sweep.py ]; then
+  python3 scripts/salience_sweep.py | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for s in sorted(d["scores"], key=lambda s: (-s["computed"], s["file"]))[:5]:
+    computed, root, file = s["computed"], s["root"], s["file"]
+    print(f"{computed} {root}/{file}")
+'
+else
+  echo "sweep script unavailable: recompute by hand with the formula in docs/ADVANCED.md"
+fi
+```
+
+Without the script, apply the formula by hand to every project file; the
+result must be the same numbers. If those fields are not present, the team
+has not adopted the layer: skip this silently, with no mention of it
 anywhere in the output.
 
 ---
@@ -151,7 +185,7 @@ means no earlier log exists yet, on a brand-new brain.
 date strings already in hand: deciding whether they are consecutive calendar
 dates needs no `date` command, just reading them. If they are not consecutive
 (any gap, even one day), say so plainly at the very top of the briefing,
-before anything else, e.g. "most recent prior log is 2026-07-19, the
+before anything else, e.g. "most recent prior log is YYYY-MM-DD, the
 workspace has a logging gap." Never let an old thread from a gapped log read
 as fresh just because it happened to be selected into this window.
 
@@ -172,6 +206,52 @@ Extract, in priority order, and tag every item with its source date (the
   of the window's logged dates (same operator repeating it day to day, or the
   same blocker named by two different operators), tagged with its earliest
   source date: flag 🔴 stuck rather than routing it to Watch as a fresh item.
+
+**Check the state before promoting.** Before an open thread goes to Today,
+read the current state of the thing it names: the project file's `## Status`
+and `## Updates` (not only its index line), or the artefact's own status file
+when the thread names one. A thread logged late in a day is often closed by a
+later session the same day, and the log never says so. Closed there: drop it.
+Unclear: route it to Watch, not Today.
+
+**Teammates since your last logged day.** What the other operators pushed
+while you were away is the part of the brain you cannot know without asking,
+so the briefing asks. The window opens on the most recent date in `DATES`
+where you (`SLUG`) actually logged (`MINE`, recomputed here since it needs
+your own slug specifically, not any operator's) and falls back to a
+fortnight; the fetch already ran in Step 0.5, so this is read-only on what it
+brought. Skip the block silently when Step 0.5 printed `NO-REMOTE`, and skip
+it too, saying so in the briefing, when it printed `FETCH FAILED`: a stale
+`origin/main` would misreport what a teammate actually pushed.
+
+```bash
+. scripts/lib/operator-registry.sh
+MINE="$(printf '%s\n' $DATES | while IFS= read -r d; do [ -f "daily-log/${d}-${SLUG}.md" ] && echo "$d"; done | awk -v t="$TODAY" '$0 < t' | tail -1)"
+SINCE="${MINE:-14 days ago}"
+while IFS= read -r f; do
+  OSLUG="$(basename "$f" .md)"
+  [ "$OSLUG" = "$SLUG" ] && continue
+  set --
+  while IFS= read -r NAME; do [ -n "$NAME" ] && set -- "$@" --author="$NAME"; done < <(operator_git_names "$OSLUG")
+  [ "$#" -eq 0 ] && { echo "TEAMMATE $OSLUG: no git_names in the registry"; continue; }
+  N="$(git log origin/main "$@" --since="$SINCE" --oneline 2>/dev/null | wc -l | tr -d ' ')"
+  MEM="$(git log origin/main "$@" --since="$SINCE" --name-only --pretty=format: 2>/dev/null | grep -E '^(memory/|areas/[^/]+/memory/)' | sort -u | tr '\n' ' ')"
+  DATES_NOLOG="$(git log origin/main "$@" --since="$SINCE" --date=short --pretty=format:'%ad' 2>/dev/null | sort -u | while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ -f "daily-log/${d}-${OSLUG}.md" ]; then continue; fi
+      if git ls-tree -r --name-only origin/main -- "daily-log/${d}-${OSLUG}.md" 2>/dev/null | grep -q .; then continue; fi
+      echo "$d"
+    done | tr '\n' ' ')"
+  echo "TEAMMATE $OSLUG since $SINCE: $N commits; memory files: ${MEM:-none}; dates with commits and no log: ${DATES_NOLOG:-none}"
+done < <(registry_files)
+```
+
+Render it as one "Teammates" line per operator in the Notes section (or in
+Today, when a teammate touched a memory file you are about to update, since
+your debrief would otherwise write over their change). A date with commits and
+no log is worth one line in Watch, with a ready-to-send note: "you pushed on
+<date> and I cannot find `daily-log/<date>-<slug>.md`; could you note in your
+next log what those commits were for?" Send it or not: the operator's call.
 
 ---
 
@@ -263,8 +343,8 @@ substituted for the literal values Step 0 printed:
 ```
 
 Never overwrite an existing file. If Step 6 finds one already there, an
-earlier session today (a debrief, a granola-style meeting log, or an earlier
-briefing) already owns it, and this step is a no-op.
+earlier session today (a debrief, a meeting debrief, or an earlier briefing)
+already owns it, and this step is a no-op.
 
 ---
 

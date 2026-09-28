@@ -15,7 +15,15 @@ Contributed files should help any team, regardless of domain, industry, or size.
 ### Follow the structure
 
 - Memory files go under `memory/` with standardized frontmatter (see `memory/CLAUDE.md`).
-- Skills live under `skills/` as self-contained folders with a single `SKILL.md`.
+- Skills live under `skills/` as self-contained folders: one `SKILL.md`, plus an optional `reference/` subfolder for rare-path material (`docs/SKILL-MAINTENANCE.md`).
+- Scripts live under `scripts/` and each ships with a test under `scripts/tests/`,
+  runnable standalone; most follow a `test-<name>.sh` / `test_<name>.py` naming
+  convention, though the tooling does not enforce the exact name.
+  `scripts/tests/run-all.sh` runs that suite, but the git engine's scenario bench
+  (`scripts/tests/debrief-push-bench.sh`) is deliberately left out of it because it
+  builds throwaway repositories and is slow; run it by name whenever you touch
+  `scripts/debrief-push.sh` or `scripts/debrief-verify.sh`. Run every relevant test
+  before opening a pull request.
 - Areas go under `areas/` with a `CLAUDE.md` (conventions and operational scope) and `Context.md` (content template for customization).
 - All structural frontmatter and headers stay in English. Content can be in any language.
 

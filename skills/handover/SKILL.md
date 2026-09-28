@@ -6,6 +6,8 @@ description: |
   between two chats, not a save (persisting goes through /session-debrief).
   Use when the operator says: handover, /handover, pass the baton (to save);
   resume the handover, pick up the handover, resume the chat (to resume).
+  Not for: "what do we save", "debrief", "close the session" (those persist
+  the work and belong to /session-debrief).
 ---
 
 # /handover
@@ -21,7 +23,13 @@ This is surgical and instant: a single throwaway file, outside the repo.
 
 The file lives at a fixed path: `${TMPDIR:-/tmp}/brain-handover.md`. Outside
 the repo (git never sees it), the OS cleans it up, and at most one exists at
-a time.
+a time. The slot has no owner: the first "resume" from any chat consumes it,
+which is why Resume mode confirms the title before deleting anything.
+
+**No secrets in the file.** The temp directory has no restrictive
+permissions and the file can outlive the chat that wrote it, so it must never
+be the only place a credential lives. Record the name of the variable, never
+its value; the value is re-entered through the environment in the new chat.
 
 ---
 
@@ -77,7 +85,9 @@ If the intent is ambiguous, ask which of the two before acting.
    ```
 
    Get today's date with `date +%Y-%m-%d` (and `date +%H:%M` for the time)
-   before writing it into the title; never compute it by hand.
+   before writing it into the title; never compute it by hand. Before
+   writing, scan the draft for anything that looks like a token, a key, or a
+   password: if one is there, replace it with the variable name.
 
 3. **Confirm** in chat: the path plus a 2-line recap of what was captured.
    No approval needed, no preview before writing: it is temporary and zero
@@ -93,27 +103,51 @@ perform any git operation. That is the whole point of this skill.
 
 1. **Read** `${TMPDIR:-/tmp}/brain-handover.md`.
    - If the file **does not exist**, say so calmly ("no saved handover to
-     resume") and stop. Never invent context.
+     resume") and never invent context. Then look for a hand-written pass
+     note before giving up: untracked files in the tree whose name says
+     handover, and the `## Open threads` section of your own recent daily
+     logs.
 
-2. **Load the context**: absorb the content as the starting state of the new
+     ```bash
+     cd "$(git rev-parse --show-toplevel)"
+     git -c core.quotePath=false status --short --untracked-files=all | grep -i "handover\|handoff" || echo "no hand-written pass note in the tree"
+     SLUG="$(scripts/lib/operator-registry.sh resolve)" && ls daily-log/*-"$SLUG".md 2>/dev/null | tail -2
+     ```
+
+     If something related turns up, propose it ("I found `<path>`, open
+     it?"); never open it silently, and stop if nothing does. A missing
+     file on a resume is a **breakage** of the previous chat's save: apply
+     the Self-improvement footer to this run as well.
+
+2. **Declare the title** (the first line of the file) and ask the operator
+   to confirm it is the thread they expect. The slot is single and has no
+   owner, so a "resume" from any chat consumes whichever handover is there.
+   Only after a yes go on to step 3. If it is not the expected thread, leave
+   the file where it is and stop.
+
+3. **Load the context**: absorb the content as the starting state of the new
    chat. Recap in chat where things stood and what the next step is, so the
    operator confirms alignment.
 
-3. **Delete the file** (throwaway): `rm -f "${TMPDIR:-/tmp}/brain-handover.md"`.
-   Delete only **after** a successful read, never before.
+4. **Delete the file** (throwaway): `rm -f "${TMPDIR:-/tmp}/brain-handover.md"`.
+   Delete only **after** a successful read and a confirmed title, never
+   before.
 
-4. **Confirm**: "Baton taken, file discarded. Picking up from: <next step>."
+5. **Confirm**: "Baton taken, file discarded. Picking up from: <next step>."
 
 ---
 
 ## Rules
 
-- **Never touch memory, daily-log, or git.** That is the clean split from
-  `session-debrief`. If persistence is needed, point there instead.
+- **Never write to memory, daily-log, or git.** That is the clean split from
+  `session-debrief`. If persistence is needed, point there instead. Resume
+  may run a read-only `git status` to look for a hand-written pass note; it
+  never writes.
 - **One file, fixed path, overwrite.** `${TMPDIR:-/tmp}/brain-handover.md`.
   No timestamped files piling up.
-- **Delete after reading, not before.** In Resume mode, the `rm` is the last
-  step, only after a successful read.
+- **Delete after reading and confirming, not before.** In Resume mode, the
+  `rm` is the last step, only after a successful read and a confirmed title.
+- **No credentials in the file.** Variable names only, never values.
 - **Adaptive template.** Only the sections with real content.
 - **Write tool for the file, not `sed`/`perl`/heredoc text-munging.**
   Apostrophes in natural language break single-quoted shell strings.

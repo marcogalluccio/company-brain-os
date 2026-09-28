@@ -19,8 +19,9 @@ maintenance for a problem you don't have yet.
 
 This layer is independent of `docs/GOVERNANCE.md`. You can adopt one, both, or
 neither; they don't interact. It is also the only place in the template that
-requires Python 3: the core layer needs nothing beyond git and a text editor,
-this one needs the two scripts in `scripts/`.
+requires Python 3: the core layer needs nothing beyond git, bash and a text editor,
+this one needs the scripts in `scripts/` (each ships with its tests under
+`scripts/tests/`; `bash scripts/tests/run-all.sh` runs them all).
 
 ## 2. Frontmatter extensions (opt-in, additive)
 
@@ -75,7 +76,13 @@ a number with a shelf life belongs.
 ## 4. Who computes it, when
 
 Three moments compute or read this score, and they map directly onto the
-advanced-layer hooks already written into the skills that adopt this doc.
+advanced-layer hooks already written into the skills that adopt this doc. All
+three take their numbers from `python3 scripts/salience_sweep.py`, a read-only
+script that applies the formula above to every project and strategic file in
+every memory root and prints the result as JSON (`scores` for every file,
+`restamps` where the written value drifted, `emoji_suggestions` for items that
+have gone cold, `errors` for unparseable dates). Without Python the hooks fall
+back to the formula by hand; the numbers are the same.
 
 - **`/session-debrief`** refreshes `last_touched` and recomputes `salience` for
   the files the session actually touched, and only those files. The recompute
@@ -119,6 +126,10 @@ timestamp. `MEMORY.md` stays the human dashboard, read on every session start;
 `INDEX.generated.md` is read on demand by tooling or by an agent that needs a
 machine-parseable view of the corpus, never auto-loaded.
 
+With federated roots (section 8) there is one generated index per root,
+`areas/<name>/memory/INDEX.generated.md` next to each area's `MEMORY.md`;
+`--write` regenerates all of them and `--check` names each stale one.
+
 The file is gitignored (see the `memory/INDEX.generated.md` line in
 `.gitignore`) and regenerated per machine. It is never committed and never
 merged: a generated file with content-addressed output would still produce an
@@ -138,20 +149,26 @@ watches; it prints JSON findings to stdout. Useful flags: `--repo` to point at
 a different tree, `--as-of` to evaluate deadlines as of a specific date instead
 of today, `--only` to run a comma-separated subset of checks, `--baseline` to
 diff findings against a previously saved JSON run, and `--strict` to turn
-blocking findings into a nonzero exit code.
+blocking findings into a nonzero exit code. `MEMORY_GATE_AREA_LIMIT_BYTES`
+sets the cap of area indexes (default: the same cap as `MEMORY.md`).
 
 The checks: `BROKEN` (a `[[wikilink]]` that doesn't resolve to a real file),
 `ORPHAN` (a project or strategic node with zero incoming links), `ISLAND` (a
 cluster of two or more nodes disconnected from the main body of the graph),
-`INDEX-ROW` (a mismatch between a file and its line in `MEMORY.md`), `BUDGET`
-(`MEMORY.md` approaching or over its auto-load size limit), `STALE-INDEX`
+`INDEX-ROW` (a mismatch between a file and its index row, wherever the row lives:
+`MEMORY.md`, `REFERENCES.md`, or `archive/INDEX.md`), `BUDGET`
+(`MEMORY.md` approaching or over its auto-load size limit), `ROW-BUDGET` (rows of
+`MEMORY.md` heavier than the per-row budget derived from that limit: one aggregated
+warning naming the heaviest rows, the number the debrief reads before it writes),
+`STALE-INDEX`
 (`INDEX.generated.md` out of date with its sources), `DUP-STEM` (two files
-sharing the same filename stem across active memory and the archive), and
-`UNTYPED` (a file missing a valid `type` in its frontmatter).
+sharing the same filename stem across active memory and the archive),
+`DUP-ROOT` (the same stem in two memory roots: an item has one home, section
+8), and `UNTYPED` (a file missing a valid `type` in its frontmatter).
 
-Not every finding blocks. Only `BROKEN`, `DUP-STEM`, a missing `MEMORY.md`
-under `INDEX-ROW`, and `BUDGET` over the hard limit are blocking; the rest
-(`ORPHAN`, `ISLAND`, the softer `INDEX-ROW` and `BUDGET` cases, `STALE-INDEX`,
+Not every finding blocks. Only `BROKEN`, `DUP-STEM`, `DUP-ROOT`, a missing
+`MEMORY.md` under `INDEX-ROW`, and `BUDGET` over the hard limit are blocking; the rest
+(`ORPHAN`, `ISLAND`, the softer `INDEX-ROW` and `BUDGET` cases, `ROW-BUDGET`, `STALE-INDEX`,
 `UNTYPED`) are warnings or informational. `--strict` only fails the exit code
 on blocking findings; warnings alone never fail it. The JSON output's `green`
 field is `false` whenever any finding exists at all, blocking or not, so
@@ -183,14 +200,89 @@ Run the gate weekly alongside `/memory-checkup`, or wire `--strict` into CI or
 a pre-push hook if you want it enforced automatically; either way it stays
 read-only and never rewrites memory on its own.
 
+The `BUDGET` and `ROW-BUDGET` checks read only `MEMORY.md` and need none of the
+frontmatter fields of section 2: they are useful on the core layer too, and
+`/session-debrief` runs them before drafting index rows whenever Python and the
+script are available.
+
 ## 7. Rollback
 
 Nothing in the core layer depends on any of this. To drop the advanced layer
 entirely: delete `last_touched`, `salience`, and `pinned` from every
-frontmatter block that carries them, and delete the two generated artifacts,
+frontmatter block that carries them, and delete the generated artifacts,
 `memory/INDEX.generated.md` (if a local copy exists; it's gitignored, so
 there's usually nothing to remove from git) and any saved `--baseline` JSON
-files. Once those fields are gone, the three advanced-layer hooks in
+files, plus any `areas/<name>/memory/INDEX.generated.md`. Once those fields
+are gone, the three advanced-layer hooks in
 `/session-debrief`, `/daily-briefing`, and `/memory-checkup` detect their
 absence and skip themselves silently, exactly as they do for a team that never
 adopted this layer. You're back on the core schema, no residue.
+
+## 8. Federated memory roots (opt-in)
+
+The third step, after the core layer and the salience layer above. Off by
+default; nothing in the template assumes it.
+
+### When
+
+One `memory/` folder is right for most teams for a long time. Consider a
+second root when one area of the work has its own high-frequency state that
+crowds the shared index: a dozen or more active items that only the people
+working in that area ever open, while the rest of the team pays for them at
+every session start. The signal is the `BUDGET` check turning yellow while
+most rows belong to one area.
+
+### How
+
+An area root is `areas/<name>/memory/`, with the same grammar as `memory/`:
+a `MEMORY.md` index, one file per item with the frontmatter of
+`memory/CLAUDE.md`, an `archive/` folder with its `archive/INDEX.md`. Turning
+it on is two edits and no change to any skill:
+
+1. Create `areas/<name>/memory/MEMORY.md` (copy the section headings of
+   `memory/MEMORY.md`) and move the area's `project_*` files and their rows
+   into it with `git mv`.
+2. Add a pointer row to `memory/MEMORY.md` under a `## Areas` heading:
+
+   ```
+   ## Areas
+
+   - [Operations](../areas/operations/memory/MEMORY.md) - what the root holds, when to open it.
+   ```
+
+   No status, no next action on that row: if it carried them, the primary
+   index would grow again at every debrief, which is what the split is for.
+
+Rules that keep the roots coherent:
+
+- **One home per item.** A file lives in the root of the area that owns its
+  next action, and its index row lives in that same root's `MEMORY.md`. An
+  item that straddles two areas stays where it lives and links the other with
+  a `[[wikilink]]`; wikilinks resolve across every root and archive. The gate
+  reports the same stem in two roots as `DUP-ROOT`, blocking.
+- **`reference_*` and `feedback_*` stay in `memory/`.** They weigh nothing in
+  the index and belong to everyone.
+- **The daily log stays one folder at the repo root.** It records sessions,
+  which cross areas; roots hold state, not diaries.
+- **Only `memory/MEMORY.md` is auto-loaded.** Area indexes open on demand: the
+  boot sequence in `CLAUDE.md` reads an area's `memory/MEMORY.md` when the
+  task touches that area, and `/session-debrief` and `/daily-briefing` follow
+  the `## Areas` pointer rows.
+
+### What the tooling does
+
+`scripts/build_index.py`, `scripts/memory_gate.py` and
+`scripts/salience_sweep.py` discover roots by themselves: `memory/` plus
+every `areas/<name>/memory/` that holds a `MEMORY.md`, nothing else and no
+hand-kept list. One generated index per root; wikilinks resolved across all
+of them; `BUDGET`, `ROW-BUDGET` and `STALE-INDEX` per index; `INDEX-ROW`
+also checks that every area root has its pointer row and every pointer row
+has its root. The shell checks in `/memory-checkup` and `/system-checkup`
+loop over the same roots. With no area root every one of these runs once, on
+`memory/`, and behaves exactly as it did before this section existed.
+
+### Rollback
+
+Move the files and rows back into `memory/` with `git mv`, delete the
+`## Areas` section, delete `areas/<name>/memory/`. Nothing else remembers
+the root.

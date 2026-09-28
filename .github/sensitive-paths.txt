@@ -1,0 +1,33 @@
+# Sensitive paths (docs/GOVERNANCE.md step 3).
+#
+# A path listed here may land on `main` directly only when pushed by an
+# operator whose registry file (operators/<slug>.md) declares
+# `sensitive_owner: true`. For anyone else the debrief routes it into a
+# proposal pull request, the local pre-push hook (githooks/pre-push) refuses
+# a direct push of it, and the CI tripwire
+# (.github/workflows/sensitive-tripwire.yml) opens an issue if one reaches
+# `main` anyway.
+#
+# Syntax, one entry per line:
+#   pattern      shell glob matched against the whole repo-relative path;
+#                `*` also matches `/`, so `areas/finance/*` covers every depth.
+#   !pattern     exception: a path matching it is never sensitive, even if a
+#                pattern would catch it. Exceptions win wherever they sit.
+#   # comment    ignored, as are blank lines.
+#
+# The file ships inert: nothing below is active until you uncomment or add a
+# line. Keep it a subset of the scopes you route to named reviewers in
+# .github/CODEOWNERS; /system-checkup reports drift between the two. A path
+# escapes the structural and sensitive classes only when every list whose
+# patterns would catch it also exempts it, so an exception meant for both
+# lists is written in both.
+#
+# !areas/finance/public-summary.md
+# areas/finance/*
+# areas/legal/*
+#
+# The registry is the root of trust for the whole recipe: whether a path may be
+# pushed straight to `main` is read from operators/<slug>.md, so a change to
+# that folder is a change to who may push what. Without the line below, an
+# operator can grant themselves `sensitive_owner: true` in an ordinary commit.
+# operators/*

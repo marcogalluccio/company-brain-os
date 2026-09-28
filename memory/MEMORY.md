@@ -19,7 +19,7 @@ this layer live in `memory/CLAUDE.md`, read it before writing anything here.
 
 ## References
 
-<!-- - [Title](reference_slug.md) - <emoji> one line + Next action -->
+External pointers (`reference_*`) are listed in [REFERENCES.md](REFERENCES.md), read on demand. Projects that use one link it with a `[[wikilink]]`.
 
 ## Feedback
 
@@ -27,4 +27,4 @@ this layer live in `memory/CLAUDE.md`, read it before writing anything here.
 
 ## Archive
 
-<!-- Closed items move here: status ❌, file moved to memory/archive/. -->
+Closed items live in `memory/archive/`, listed in [archive/INDEX.md](archive/INDEX.md). Closing an item: status ❌, file moved there, its row moved there.

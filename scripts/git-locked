@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Serializes git operations between parallel agent sessions on the same clone.
+# Usage: scripts/git-locked <command> [args...]
+#
+# The lock is a directory under the shared git dir: mkdir is atomic on every
+# platform git runs on, so two sessions cannot both create it. A stale lock
+# (owner process gone, older than GIT_LOCKED_STALE_SECS, no merge or rebase
+# in progress) is broken by a single elected breaker, so two waiters that
+# notice the same stale lock at the same moment cannot both acquire it. A lock
+# held while an integration is in progress is never broken: that state must
+# be finished by whoever owns it.
+#
+# Exit 75 when the lock is still held after GIT_LOCKED_MAX_TRIES seconds; the
+# wrapped command's exit code otherwise.
+set -u
+COMMON_DIR="$(git rev-parse --git-common-dir)" || exit 1
+case "$COMMON_DIR" in /*) : ;; *) COMMON_DIR="$(pwd)/$COMMON_DIR" ;; esac
+LOCK="$COMMON_DIR/brain-git.lock"
+MAX_TRIES="${GIT_LOCKED_MAX_TRIES:-30}"
+STALE_SECS="${GIT_LOCKED_STALE_SECS:-600}"
+
+integration_in_progress() {
+  [ -e "$COMMON_DIR/MERGE_HEAD" ] || [ -d "$COMMON_DIR/rebase-merge" ] || [ -d "$COMMON_DIR/rebase-apply" ]
+}
+
+# Elect one breaker through a sibling directory, re-check that the lock still
+# belongs to the same dead owner, and only then remove it. Nobody else ever
+# removes the lock, so its owner cannot change while it exists.
+break_stale_lock() {
+  local opid="$1" ots="$2" break_dir="$LOCK.breaking"
+  mkdir "$break_dir" 2>/dev/null || return 1
+  if [ -f "$LOCK/owner" ]; then
+    local vpid vts
+    read -r vpid vts < "$LOCK/owner" 2>/dev/null || { vpid=0; vts=0; }
+    if [ "$vpid" = "$opid" ] && [ "$vts" = "$ots" ] \
+       && ! kill -0 "${vpid:-0}" 2>/dev/null && ! integration_in_progress; then
+      echo "git-locked: breaking a stale lock (owner pid $opid is gone, no integration in progress)" >&2
+      rm -rf "$LOCK"
+    fi
+  fi
+  rmdir "$break_dir" 2>/dev/null
+  return 0
+}
+
+tries=0
+while ! mkdir "$LOCK" 2>/dev/null; do
+  if [ -f "$LOCK/owner" ]; then
+    read -r opid ots < "$LOCK/owner" 2>/dev/null || { opid=0; ots=0; }
+    now=$(date +%s)
+    if ! kill -0 "${opid:-0}" 2>/dev/null && ! integration_in_progress \
+       && [ $(( now - ${ots:-0} )) -gt "$STALE_SECS" ]; then
+      break_stale_lock "$opid" "$ots" && continue
+    fi
+  fi
+  tries=$((tries+1))
+  if [ "$tries" -ge "$MAX_TRIES" ]; then
+    echo "git-locked: lock still held after ${MAX_TRIES}s; another session is running git operations. Retry shortly." >&2
+    exit 75
+  fi
+  sleep 1
+done
+printf '%s %s\n' "$$" "$(date +%s)" > "$LOCK/owner"
+release() { grep -q "^$$ " "$LOCK/owner" 2>/dev/null && rm -rf "$LOCK"; }
+trap release EXIT INT TERM
+
+"$@"

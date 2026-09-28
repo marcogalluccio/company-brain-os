@@ -30,7 +30,9 @@ On every new conversation, before starting any task:
 1. Read the most recent daily logs: your own and your teammates', so you catch up on
    unfinished threads before starting new work.
 2. Read today's daily log, if it exists.
-3. Read the `CLAUDE.md` of whatever area the task touches (`areas/<name>/CLAUDE.md`).
+3. Read the `CLAUDE.md` of whatever area the task touches (`areas/<name>/CLAUDE.md`),
+   and its `memory/MEMORY.md` if that area keeps its own memory root
+   (`docs/ADVANCED.md` section 8; `memory/MEMORY.md` lists them under `## Areas`).
 
 ## Structure
 
@@ -43,8 +45,14 @@ On every new conversation, before starting any task:
 - `private/`: gitignored; raw client materials, secrets, anything that must not sync.
 - `skills/`: Claude Code skills, if you adopt them; `_improvements/` captures friction
   against the skill layer itself.
-- `docs/`: the growth docs, `ADVANCED.md` and `GOVERNANCE.md`.
-- `scripts/`: optional tooling, used only if you adopt `docs/ADVANCED.md`.
+- `docs/`: the growth docs, `ADVANCED.md` and `GOVERNANCE.md`, plus `SKILL-MAINTENANCE.md` for the skills suite.
+- `scripts/`: the git engine behind `/session-debrief` and `/sync` (`debrief-push.sh`,
+  `debrief-verify.sh`, `git-locked`, with their tests in `scripts/tests/`), plus optional
+  memory tooling used only if you adopt `docs/ADVANCED.md`, and optional governance
+  tooling used only if you adopt `docs/GOVERNANCE.md`; every script has a test in
+  `scripts/tests/`.
+- `githooks/`: the local pre-push guard of `docs/GOVERNANCE.md` step 3, activated per
+  clone with `git config core.hooksPath githooks`; inert until that step is adopted.
 - `.claudeignore`: paths Claude Code never reads into context, even on request
   (currently just `private/`).
 
@@ -61,7 +69,8 @@ Status scale: 🔴 urgent · 🟠 stalled/waiting · 🟡 active · 🟢 on trac
 🔵 wrap-up (done, loose ends open) · ❌ closed.
 
 `MEMORY.md` is the dashboard, auto-loaded every session. Closed items are archived,
-never deleted: status `❌`, file moved to `memory/archive/`. The operating rules of the
+never deleted: status `❌`, file moved to `memory/archive/`, row moved to
+`memory/archive/INDEX.md`; reference rows live in `memory/REFERENCES.md`. The operating rules of the
 layer (index format, preserve-first, anti-patterns) live in `memory/CLAUDE.md`, read it
 before writing anything to memory.
 
@@ -74,6 +83,7 @@ commits, and pushes.
 Iron rules:
 - Never force-push.
 - Never skip hooks (`--no-verify`).
+- Stage and commit in the same step: never leave changes staged in the shared index while another session may commit (the debrief's own archive moves are staged and committed within its flow).
 - If the debrief hits a conflict, it stops and asks. It never resolves silently.
 - Resolve inside the rebase (a targeted `add` plus `continue`) or abort to a safe,
   explicit deferral. Never abort onto a dirty tree: an abort there can destroy another
@@ -87,6 +97,10 @@ Some things must never be written into this repo, not even by accident:
 - Secrets: API keys, tokens, passwords, `.env` files, credentials.
 - Raw client materials under NDA.
 - Regulated personal data.
+
+Secret values never pass through chat or the agent's output either: they go in through a
+hidden-prompt script, and only variable names are written down (`secret-leak-via-shell` in
+`skills/_improvements/known-patterns.md`).
 
 These go in `private/` (gitignored, stays on the machine that created them) or outside
 the repo entirely. If you are unsure whether something qualifies, treat it as private

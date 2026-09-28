@@ -24,8 +24,9 @@ __pycache__/
 # under an excluded directory, so the folder's own README needs this form.)
 private/*
 !private/README.md
-# Machine-generated index: regenerated locally, never merged.
+# Machine-generated indexes: regenerated locally, never merged.
 memory/INDEX.generated.md
+areas/*/memory/INDEX.generated.md
 # Session-scratch files some skills produce:
 *.handover.md
 SETUP-STATE.md

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Local guard for sensitive paths (docs/GOVERNANCE.md step 3).
+#
+# Refuses a push to main that touches a path listed in
+# .github/sensitive-paths.txt unless the pushing operator's registry file
+# declares `sensitive_owner: true`. Activate once per clone:
+#
+#   git config core.hooksPath githooks
+#
+# This is detection plus discipline, not a wall: `--no-verify` skips it and an
+# unset core.hooksPath never runs it. The CI tripwire is the second net, and
+# the debrief classifier is the first: by the time a push reaches this hook,
+# the sensitive paths of a non-owner should already be on a proposal branch.
+set -u
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SENSITIVE_FILE="$REPO_ROOT/.github/sensitive-paths.txt"
+. "$REPO_ROOT/scripts/lib/path-list.sh"
+. "$REPO_ROOT/scripts/lib/operator-registry.sh"
+export OPERATORS_DIR="$REPO_ROOT/operators"
+
+list_has_active_patterns "$SENSITIVE_FILE" || exit 0
+
+ZERO=0000000000000000000000000000000000000000
+EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+NL=$'\n'
+hits=""
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  [ "$remote_ref" = "refs/heads/main" ] || continue
+  [ "$local_sha" = "$ZERO" ] && continue
+  if [ "$remote_sha" = "$ZERO" ]; then
+    # First push of main: compare against the remote-tracking ref if it
+    # exists, otherwise against the empty tree so every file is scanned.
+    base="$(git rev-parse -q --verify origin/main 2>/dev/null || printf '%s' "$EMPTY_TREE")"
+  else
+    base="$remote_sha"
+  fi
+  # A range this clone cannot diff yields no output and a non-zero status,
+  # which would otherwise read as "no sensitive path in this push". Refuse
+  # instead: an unscanned push must not pass for a scanned one.
+  if ! changed="$(git diff --name-only "$base" "$local_sha" 2>/dev/null)"; then
+    echo "PRE-PUSH REFUSED: the range $base..$local_sha cannot be diffed on this clone, so this push could not be scanned for sensitive paths." >&2
+    echo "Fetch the remote and retry (git fetch origin), or check the range by hand before pushing." >&2
+    exit 1
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    path_in_list "$SENSITIVE_FILE" "$f" && hits="${hits:+$hits$NL}$f"
+  done < <(printf '%s\n' "$changed")
+done
+[ -n "$hits" ] || exit 0
+
+if ! slug="$(resolve_operator "$(git config user.name)")"; then
+  echo "PRE-PUSH REFUSED: this push touches sensitive paths and the operator could not be resolved from operators/." >&2
+  exit 1
+fi
+is_sensitive_owner "$slug" && exit 0
+
+echo "PRE-PUSH REFUSED: these paths are sensitive (.github/sensitive-paths.txt) and operators/$slug.md does not declare sensitive_owner: true:" >&2
+printf '%s\n' "$hits" | sed 's/^/  /' >&2
+echo "Route them through a proposal pull request instead (docs/GOVERNANCE.md step 3; /session-debrief does this for you)." >&2
+exit 1

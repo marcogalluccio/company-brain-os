@@ -17,16 +17,34 @@ reporting).
 """
 import argparse, datetime as dt, hashlib, json, os, re, subprocess, sys
 
-LIMIT_BYTES = int(os.environ.get("MEMORY_GATE_LIMIT_BYTES", "24986"))  # 24.4 KiB auto-load
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_index  # memory_roots, is_primary, PRIMARY, render
+
+LIMIT_BYTES = int(os.environ.get("MEMORY_GATE_LIMIT_BYTES", "24986"))  # host tool's auto-load cap
 BUDGET_WARN_RATIO = 0.90
-NON_NODES = {"MEMORY.md", "CLAUDE.md", "INDEX.generated.md"}
+# Area indexes are opened on demand, not at session start, but an index heavier
+# than what the boot tolerates is too heavy to open at all. Default: same cap.
+AREA_LIMIT_BYTES = int(os.environ.get("MEMORY_GATE_AREA_LIMIT_BYTES", str(LIMIT_BYTES)))
+# Per-row budget for an index file: what is left of the auto-load cap once the
+# fixed prose (headings, intro sentences) is subtracted, divided among the rows
+# plus headroom for growth. The headroom is a declared allowance, not a
+# measurement: an index is expected to gain about a quarter more rows before
+# anyone prunes it. MEMORY_GATE_ROW_LIMIT_BYTES replaces the derivation with a
+# fixed cap (tests, or a team that prefers a number).
+ROW_BUDGET_HEADROOM = 0.25
+ROW_LIMIT_BYTES = os.environ.get("MEMORY_GATE_ROW_LIMIT_BYTES")
+ROW_BUDGET_WORST = 5  # how many of the heaviest rows to name in the finding
+NON_NODES = {"MEMORY.md", "REFERENCES.md", "CLAUDE.md", "INDEX.generated.md"}
 EXEMPT_TYPES = {"reference", "feedback"}
-ALL_CHECKS = ["BROKEN", "ORPHAN", "ISLAND", "INDEX-ROW", "BUDGET", "STALE-INDEX",
-              "DUP-STEM", "UNTYPED"]
+ALL_CHECKS = ["BROKEN", "ORPHAN", "ISLAND", "INDEX-ROW", "BUDGET", "ROW-BUDGET",
+              "STALE-INDEX", "DUP-STEM", "DUP-ROOT", "UNTYPED"]
 VALID_TYPES = {"project", "strategic", "reference", "feedback"}
 WIKILINK = re.compile(r"\[\[([A-Za-z0-9_\-]+)\]\]")
 EMOJI = re.compile("[\U0001F534\U0001F7E0\U0001F7E1\U0001F7E2\U0001F535❌]")
 LINK_ROW = re.compile(r"^- \[[^\]]+\]\(((?:archive/)?[A-Za-z0-9_\-]+\.md)\)")
+# Pointer row of the primary index's `## Areas` section:
+# - [Name](../areas/<name>/memory/MEMORY.md) - what it holds, when to open it
+AREA_ROW = re.compile(r"^- \[[^\]]+\]\(\.\./(areas/[A-Za-z0-9_\-]+/memory)/MEMORY\.md\)")
 
 
 def fail(msg):
@@ -67,34 +85,47 @@ def is_non_node(fn):
 
 
 def load_corpus(repo):
-    """Returns (corpus, dup_findings). On a duplicate stem between memory/
-    and memory/archive/, the active file wins (loaded first): the gate
-    reports the duplicate, it does not die."""
-    mem = os.path.join(repo, "memory")
-    if not os.path.isdir(mem):
+    """Returns (corpus, dup_findings). Nodes are the union of every memory
+    root. A duplicate stem inside one root (active vs archive) is DUP-STEM
+    and the active file wins; the same stem in two roots is DUP-ROOT and the
+    root loaded first (the primary) wins. Either way the gate reports and
+    goes on; it does not die on a duplicate."""
+    roots = build_index.memory_roots(repo)
+    if not roots:
         fail(f"memory/ not found in {repo}")
     corpus, dups = {}, []
-    for base, active in ((mem, True), (os.path.join(mem, "archive"), False)):
-        if not os.path.isdir(base):
-            continue
-        for fn in sorted(os.listdir(base)):
-            if not fn.endswith(".md") or (active and is_non_node(fn)):
+    for root in roots:
+        rroot = os.path.relpath(root, repo)
+        for base, active in ((root, True), (os.path.join(root, "archive"), False)):
+            if not os.path.isdir(base):
                 continue
-            path = os.path.join(base, fn)
-            if not os.path.isfile(path):
-                continue
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-            fm, body = split_frontmatter(text)
-            if fn[:-3] in corpus:
-                dups.append(finding("DUP-STEM", fn, "error", True,
-                                    f"same stem in memory/ and memory/archive/: {fn} "
-                                    f"(the active file wins; rename or remove the duplicate)"))
-                continue
-            corpus[fn[:-3]] = {
-                "file": fn, "active": active, "fm": fm, "body": body,
-                "rel": ("memory/" if active else "memory/archive/") + fn,
-            }
+            for fn in sorted(os.listdir(base)):
+                if not fn.endswith(".md") or (active and is_non_node(fn)):
+                    continue
+                if not active and fn == "INDEX.md":  # the archive's own index, not a node
+                    continue
+                path = os.path.join(base, fn)
+                if not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8") as fh:
+                    text = fh.read()
+                fm, body = split_frontmatter(text)
+                rel = f"{rroot}/{fn}" if active else f"{rroot}/archive/{fn}"
+                stem = fn[:-3]
+                if stem in corpus:
+                    prev = corpus[stem]
+                    if prev["root"] == rroot:
+                        dups.append(finding("DUP-STEM", fn, "error", True,
+                                            f"same stem in {rroot}/ and {rroot}/archive/: {fn} "
+                                            f"(the active file wins; rename or remove the duplicate)"))
+                    else:
+                        dups.append(finding("DUP-ROOT", fn, "error", True,
+                                            f"same stem in two memory roots: {prev['rel']} and {rel} "
+                                            f"(an item has one home, the root that owns its next "
+                                            f"action; move or archive the other copy)"))
+                    continue
+                corpus[stem] = {"file": fn, "active": active, "fm": fm, "body": body,
+                                "rel": rel, "root": rroot}
     return corpus, dups
 
 
@@ -111,7 +142,8 @@ def check_untyped(corpus):
 
 def corpus_hash(repo):
     h = hashlib.sha256()
-    for sub in ("memory", "scripts"):
+    subs = [os.path.relpath(r, repo) for r in build_index.memory_roots(repo)] + ["scripts"]
+    for sub in subs:
         base = os.path.join(repo, sub)
         if not os.path.isdir(base):
             continue
@@ -140,7 +172,7 @@ def check_broken(corpus):
         for target in WIKILINK.findall(n["body"]):
             if target not in corpus:
                 out.append(finding("BROKEN", f"{n['file']}:{target}", "error", True,
-                                   f"[[{target}]] in {n['rel']} does not resolve in memory/ or archive/"))
+                                   f"[[{target}]] in {n['rel']} does not resolve in any memory root (active or archive)"))
     return out
 
 
@@ -187,72 +219,198 @@ def check_orphan_island(corpus, comps, incoming):
     return out, nucleus
 
 
+def index_rows(root):
+    """Index target -> row text, from every file that may carry index rows.
+
+    MEMORY.md and REFERENCES.md rows point at `file.md` (or, in the inline
+    layout, `archive/file.md`); archive/INDEX.md rows point at `file.md`
+    relative to the archive folder and are keyed as `archive/file.md`, so a
+    row is the same target wherever it lives.
+    """
+    rows = {}
+    for src, prefix in (("MEMORY.md", ""), ("REFERENCES.md", ""),
+                        (os.path.join("archive", "INDEX.md"), "archive/")):
+        p = os.path.join(root, src)
+        if not os.path.isfile(p):
+            continue
+        with open(p, encoding="utf-8") as fh:
+            for line in fh:
+                m = LINK_ROW.match(line.strip())
+                if m:
+                    target = m.group(1)
+                    if prefix and not target.startswith(prefix):
+                        target = prefix + target
+                    rows.setdefault(target, line.strip())
+    return rows
+
+
+def index_target(repo, root):
+    """Finding target for an index file: `MEMORY.md` for the primary (stable
+    for allowlists written before federation), `<root>/MEMORY.md` for an area."""
+    return "MEMORY.md" if build_index.is_primary(repo, root) else f"{os.path.relpath(root, repo)}/MEMORY.md"
+
+
+def node_target(repo, root, name):
+    """Finding target for an individual memory file: `name` bare for the
+    primary (stable for allowlists written before federation), `<root>/name`
+    for an area. Same rule as index_target(), applied per-node so that two
+    roots never produce the same finding id for two different files."""
+    return name if build_index.is_primary(repo, root) else f"{os.path.relpath(root, repo)}/{name}"
+
+
 def check_index_rows(corpus, repo):
     out = []
-    idx = os.path.join(repo, "memory", "MEMORY.md")
-    if not os.path.isfile(idx):
-        return [finding("INDEX-ROW", "MEMORY.md", "error", True, "MEMORY.md missing")]
-    rows = {}
-    with open(idx, encoding="utf-8") as fh:
-        for line in fh:
-            m = LINK_ROW.match(line.strip())
-            if m:
-                rows.setdefault(m.group(1), line.strip())
-    on_disk = {("" if n["active"] else "archive/") + n["file"]: s
-               for s, n in corpus.items()}
-    for target in sorted(rows):
-        base_fn = os.path.basename(target)
-        if base_fn.endswith("_template.md") or base_fn.endswith("_example.md"):
-            # Shipped *_template.md / *_example.md rows are by-design pointers
-            # to files the gate does not load as nodes; never flag them, not
-            # even after setup deletes the example.
+    roots = build_index.memory_roots(repo)
+    for root in roots:
+        rroot = os.path.relpath(root, repo)
+        tgt = index_target(repo, root)
+        if not os.path.isfile(os.path.join(root, "MEMORY.md")):
+            out.append(finding("INDEX-ROW", tgt, "error", True, f"{rroot}/MEMORY.md missing"))
             continue
-        if target not in on_disk:
-            out.append(finding("INDEX-ROW", target, "warning", False,
-                               f"index row points to a nonexistent file: memory/{target}"))
-            continue
-        n = corpus[on_disk[target]]
-        m_st = EMOJI.search(n["fm"].get("status", ""))
-        m_row = EMOJI.search(rows[target])
-        if m_st and m_row and m_st.group(0) != m_row.group(0):
-            out.append(finding("INDEX-ROW", target, "warning", False,
-                               f"row emoji ({m_row.group(0)}) != frontmatter status ({m_st.group(0)})"))
-    for s in sorted(corpus):
-        n = corpus[s]
-        if n["active"] and n["file"] not in rows:
-            out.append(finding("INDEX-ROW", n["file"], "warning", False,
-                               f"active file with no row in MEMORY.md: {n['rel']}"))
+        rows = index_rows(root)
+        on_disk = {("" if n["active"] else "archive/") + n["file"]: s
+                   for s, n in corpus.items() if n["root"] == rroot}
+        for target in sorted(rows):
+            base_fn = os.path.basename(target)
+            if base_fn.endswith("_template.md") or base_fn.endswith("_example.md"):
+                # Shipped *_template.md / *_example.md rows are by-design pointers
+                # to files the gate does not load as nodes; never flag them, not
+                # even after setup deletes the example.
+                continue
+            if target not in on_disk:
+                stem = base_fn[:-3] if base_fn.endswith(".md") else base_fn
+                elsewhere = corpus.get(stem)
+                if elsewhere and elsewhere["root"] != rroot:
+                    # The stem exists, just not in this root's corpus: the row
+                    # is misfiled, not dangling. Say so, rather than claiming a
+                    # file that is sitting right there does not exist.
+                    detail = (f"index row points to a file that lives in another "
+                              f"root ({elsewhere['rel']}), not {rroot}/{target}")
+                else:
+                    detail = f"index row points to a nonexistent file: {rroot}/{target}"
+                out.append(finding("INDEX-ROW", node_target(repo, root, target), "warning", False, detail))
+                continue
+            n = corpus[on_disk[target]]
+            m_st = EMOJI.search(n["fm"].get("status", ""))
+            m_row = EMOJI.search(rows[target])
+            if m_st and m_row and m_st.group(0) != m_row.group(0):
+                out.append(finding("INDEX-ROW", node_target(repo, root, target), "warning", False,
+                                   f"row emoji ({m_row.group(0)}) != frontmatter status "
+                                   f"({m_st.group(0)}) in {rroot}/"))
+        for s in sorted(corpus):
+            n = corpus[s]
+            if n["root"] == rroot and n["active"] and n["file"] not in rows:
+                out.append(finding("INDEX-ROW", node_target(repo, root, n["file"]), "warning", False,
+                                   f"active file with no index row in {rroot}/: {n['rel']}"))
+    # The primary index's `## Areas` pointer rows and the area roots on disk must agree.
+    primary_idx = os.path.join(repo, build_index.PRIMARY, "MEMORY.md")
+    if os.path.isfile(primary_idx):
+        pointed = set()
+        with open(primary_idx, encoding="utf-8") as fh:
+            for line in fh:
+                m = AREA_ROW.match(line.strip())
+                if m:
+                    pointed.add(m.group(1))
+        areas = {os.path.relpath(r, repo) for r in roots if not build_index.is_primary(repo, r)}
+        for a in sorted(areas - pointed):
+            out.append(finding("INDEX-ROW", f"{a}/MEMORY.md", "warning", False,
+                               f"area root with no pointer row under ## Areas in memory/MEMORY.md: {a}/"))
+        for p in sorted(pointed - areas):
+            out.append(finding("INDEX-ROW", f"{p}/MEMORY.md", "warning", False,
+                               f"## Areas row in memory/MEMORY.md points to a missing index: {p}/MEMORY.md"))
     return out
 
 
 def check_budget(repo):
-    p = os.path.join(repo, "memory", "MEMORY.md")
-    size = os.path.getsize(p) if os.path.isfile(p) else 0
+    """Returns (findings, sizes) with sizes = {index target: bytes}, one cap per index."""
+    out, sizes = [], {}
+    for root in build_index.memory_roots(repo):
+        p = os.path.join(root, "MEMORY.md")
+        size = os.path.getsize(p) if os.path.isfile(p) else 0
+        tgt = index_target(repo, root)
+        primary = build_index.is_primary(repo, root)
+        limit = LIMIT_BYTES if primary else AREA_LIMIT_BYTES
+        sizes[tgt] = size
+        if size > limit:
+            why = "truncated at boot" if primary else "too heavy to open on demand"
+            out.append(finding("BUDGET", tgt, "error", True,
+                               f"{tgt} {size}B over the limit {limit}B: {why}"))
+        elif size > limit * BUDGET_WARN_RATIO:
+            out.append(finding("BUDGET", tgt, "warning", False,
+                               f"{tgt} {size}B over 90% of the limit ({int(limit * BUDGET_WARN_RATIO)}B)"))
+    return out, sizes
+
+
+def row_budget(limit, file_bytes, rows):
+    """Bytes one index row may take: (cap - fixed prose) / (rows * (1 + headroom)).
+    Pure in its three arguments only, so a caller iterating over several roots
+    (or an env override) can reuse it unchanged for each one."""
+    prose = file_bytes - sum(n for n, _ in rows)
+    return int((limit - prose) / (len(rows) * (1 + ROW_BUDGET_HEADROOM)))
+
+
+def index_row_sizes(path):
+    """[(byte length, target)] for every index row in the file."""
+    rows = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            m = LINK_ROW.match(line.strip())
+            if m:
+                rows.append((len(line.encode("utf-8")), m.group(1)))
+    return rows
+
+
+def check_row_budget(repo):
+    """MEMORY.md only, not REFERENCES.md or archive/INDEX.md: the budget is
+    derived from LIMIT_BYTES, the host tool's auto-load truncation cap, which
+    applies to the one file the host auto-loads. The sibling index files are
+    read on demand and carry no such cap, so there is no limit to derive a
+    per-row share from. One aggregated warning per run: how many rows exceed
+    the per-row budget, the total excess, and the heaviest rows as a concrete
+    target. Aggregated on purpose: near the cap roughly half the rows exceed
+    the average, and one finding per row would be unusable noise."""
     out = []
-    if size > LIMIT_BYTES:
-        out.append(finding("BUDGET", "MEMORY.md", "error", True,
-                           f"MEMORY.md {size}B over the limit {LIMIT_BYTES}B: truncated at boot"))
-    elif size > LIMIT_BYTES * BUDGET_WARN_RATIO:
-        out.append(finding("BUDGET", "MEMORY.md", "warning", False,
-                           f"MEMORY.md {size}B over 90% of the limit ({int(LIMIT_BYTES * BUDGET_WARN_RATIO)}B)"))
-    return out, size
+    for root in build_index.memory_roots(repo):
+        p = os.path.join(root, "MEMORY.md")
+        if not os.path.isfile(p):
+            continue
+        tgt = index_target(repo, root)
+        limit = LIMIT_BYTES if build_index.is_primary(repo, root) else AREA_LIMIT_BYTES
+        rows = index_row_sizes(p)
+        if not rows:
+            continue
+        budget = int(ROW_LIMIT_BYTES) if ROW_LIMIT_BYTES else row_budget(limit, os.path.getsize(p), rows)
+        over = sorted((r for r in rows if r[0] > budget), reverse=True)
+        if not over:
+            continue
+        excess = sum(n - budget for n, _ in over)
+        worst = ", ".join(f"{t} ({n}B)" for n, t in over[:ROW_BUDGET_WORST])
+        out.append(finding("ROW-BUDGET", tgt, "warning", False,
+                           f"{len(over)}/{len(rows)} index rows above the per-row budget of "
+                           f"{budget}B (excess {excess}B). Heaviest: {worst}. Collapse the "
+                           f"previous state into the new line instead of appending to it."))
+    return out
 
 
 def check_stale_index(repo):
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import build_index
-    expected = build_index.render(repo)
-    p = os.path.join(repo, "memory", "INDEX.generated.md")
-    if not os.path.isfile(p):
-        return [finding("STALE-INDEX", "INDEX.generated.md", "info", False,
-                        "INDEX.generated.md missing (first generation pending)")]
-    with open(p, encoding="utf-8") as fh:
-        current = fh.read()
-    if current != expected:
-        return [finding("STALE-INDEX", "INDEX.generated.md", "warning", False,
-                        "INDEX.generated.md is out of sync with the sources: regenerate "
-                        "with: python3 scripts/build_index.py --write")]
-    return []
+    out = []
+    for root in build_index.memory_roots(repo):
+        rroot = os.path.relpath(root, repo)
+        tgt = "INDEX.generated.md" if build_index.is_primary(repo, root) else f"{rroot}/INDEX.generated.md"
+        expected = build_index.render(repo, root)
+        p = os.path.join(root, "INDEX.generated.md")
+        if not os.path.isfile(p):
+            out.append(finding("STALE-INDEX", tgt, "info", False,
+                               f"{rroot}/INDEX.generated.md missing (first generation pending)"))
+            continue
+        with open(p, encoding="utf-8") as fh:
+            current = fh.read()
+        if current != expected:
+            out.append(finding("STALE-INDEX", tgt, "warning", False,
+                               f"{rroot}/INDEX.generated.md is out of sync with the sources: "
+                               "regenerate with: python3 scripts/build_index.py --write"))
+    return out
 
 
 def compute_delta(findings, size, baseline_path):
@@ -350,13 +508,13 @@ def main():
         if c not in ALL_CHECKS:
             fail(f"unknown check: {c}")
 
-    size = None
+    size, sizes = None, {}
     try:
         corpus, dups = load_corpus(repo)
         comps, incoming = graph(corpus)
         findings = []
-        if "DUP-STEM" in checks:
-            findings += dups
+        if "DUP-STEM" in checks or "DUP-ROOT" in checks:
+            findings += [f for f in dups if f["check"] in checks]
         if "UNTYPED" in checks:
             findings += check_untyped(corpus)
         if "BROKEN" in checks:
@@ -369,8 +527,11 @@ def main():
         if "INDEX-ROW" in checks:
             findings += check_index_rows(corpus, repo)
         if "BUDGET" in checks:
-            b, size = check_budget(repo)
+            b, sizes = check_budget(repo)
+            size = sizes.get("MEMORY.md")
             findings += b
+        if "ROW-BUDGET" in checks:
+            findings += check_row_budget(repo)
         if "STALE-INDEX" in checks:
             findings += check_stale_index(repo)
     except SystemExit:
@@ -387,6 +548,7 @@ def main():
         "tree_hash": corpus_hash(repo),
         "checks_run": checks,
         "memory_md_bytes": size,
+        "index_bytes": sizes,
         "graph": {"components": len(comps), "nucleus_size": len(nucleus),
                   "no_incoming": sorted(s for s in incoming if incoming[s] == 0)},
         "findings": findings,

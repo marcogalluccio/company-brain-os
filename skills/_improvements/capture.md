@@ -23,8 +23,8 @@ skill**, not an intrinsic difficulty of the task.
    before it was usable.
 
 Does NOT count (keeps the log clean):
-- Creative choices the operator must make by nature (narrative arc,
-  palette). That is the work, not friction.
+- Creative choices the operator must make by nature (naming,
+  tone, scope). That is the work, not friction.
 - One-off environment hiccups unrelated to the skill (a network timeout).
 
 ## Rules
@@ -47,9 +47,26 @@ Append to `friction-log.md`, newest first, above the `## Archive` marker:
 who: <operator-slug>
 what: one line, what went wrong and which step
 cost: one line, round-trip / redo / tokens / correction
+pattern: <class id from known-patterns.md>
 ```
 
 `who` is the operator slug of whoever hit the friction (needed once more
 than one operator uses the same skills, so patterns can be attributed). The
 third segment of the header line (after the date and the skill name) is
 only `friction` (worked but poorly/slowly) or `breakage` (did not work).
+`pattern` is optional: before writing the entry, skim
+`skills/_improvements/known-patterns.md` and, if the run matches one of its
+classes, name the class here. A match is worth more than the entry itself:
+`/skill-improve` ranks a class shared across skills above any one-off.
+
+**Where exactly the entry goes.** The new entry is the first dated entry
+of the file: directly below the `---` that closes the preamble, above every
+existing entry, always above the `## Archive` marker. Before writing, find
+the `## Archive` line and confirm the insertion point is above it. An entry
+written below the marker is invisible: everything down there is consumed
+history and `/skill-improve` never reads it.
+
+**What "open" means.** An entry is open while it has no `consumed:` line.
+Only `/skill-improve` adds that line, when it has applied a change; a
+proposed fix written under `what:` does not close the entry. Never add a
+`consumed:` line from the capture side.

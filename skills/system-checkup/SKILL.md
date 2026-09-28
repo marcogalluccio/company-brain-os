@@ -4,9 +4,9 @@ description: |
   Weekly whole-workspace health check: registry, structure, skills, and a
   memory summary, plus, where docs/GOVERNANCE.md is adopted, the git layer.
   Every check that needs a tool this machine does not have is skipped and
-  reported as skipped, never silently. Steps 1-5 run standalone; Step 6 (the
-  git layer) is inert without an authenticated gh CLI and an activated
-  docs/GOVERNANCE.md.
+  reported as skipped, never silently. Steps 1-5 run standalone, plus the
+  local half of Step 6; the GitHub half of Step 6 is inert without an
+  authenticated gh CLI and an activated docs/GOVERNANCE.md.
   Use when the operator says: system checkup, /system-checkup, system check,
   weekly review, is everything in order.
 ---
@@ -78,9 +78,11 @@ echo "gh=$GH_OK python3=$PY_OK remote=$REMOTE_OK"
 
 Where each miss routes:
 
-- `GH_OK=0`: Step 6 (git layer) skips entirely with "skipped: gh not
-  authenticated". No other step needs `gh`.
-- `PY_OK=0`: Step 5 (memory summary) cannot run `scripts/memory_gate.py`
+- `GH_OK=0`: the GitHub half of Step 6 skips with "skipped: gh not
+  authenticated"; its local half (the governance coherence check) still runs.
+  No other step needs `gh`.
+- `PY_OK=0`: Step 3 skips the `CLAUDE.md` scanner with "skipped: python3 not
+  available", and Step 5 (memory summary) cannot run `scripts/memory_gate.py`
   even if the team adopted `docs/ADVANCED.md`; it falls back to the inline
   checks from `/memory-checkup` Step 1, which are plain shell and need no
   Python.
@@ -126,15 +128,28 @@ registry.
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-# duplicate slugs / duplicate git_names across operator files
+REG_TMP="${TMPDIR:-/tmp}/checkup-registry.$$"
+# duplicate slugs across operator files
 for f in operators/*.md; do
   case "$f" in operators/CLAUDE.md|operators/ONBOARDING.md|operators/operator_template.md) continue ;; esac
   awk '/^---$/{if(x)exit;x=1;next} x' "$f" | grep '^slug:' | sed "s|^|$f: |"
-done | sort -t: -k3 | awk -F': *' 'seen[$3]++ {print "DUPLICATE SLUG: " $0}'
+done | sort > "$REG_TMP"
+cut -d: -f3- "$REG_TMP" | sort | uniq -d | while IFS= read -r dup; do
+  while IFS= read -r line; do
+    case "$line" in *":$dup") echo "DUPLICATE SLUG: $line" ;; esac
+  done < "$REG_TMP"
+done
+# duplicate git_names entries across operator files
 for f in operators/*.md; do
   case "$f" in operators/CLAUDE.md|operators/ONBOARDING.md|operators/operator_template.md) continue ;; esac
   awk '/^---$/{if(f2)exit;f2=1;next} f2' "$f" | sed 's/^[[:space:]]*//' | grep '^- ' | sed "s|^|$f: |"
-done | sort -t: -k2 | awk -F': *' 'seen[$2]++ {print "DUPLICATE git_names ENTRY: " $0}'
+done | sort > "$REG_TMP"
+cut -d: -f2- "$REG_TMP" | sort | uniq -d | while IFS= read -r dup; do
+  while IFS= read -r line; do
+    case "$line" in *":$dup") echo "DUPLICATE git_names ENTRY: $line" ;; esac
+  done < "$REG_TMP"
+done
+rm -f "$REG_TMP"
 # daily-log lineage: every log filename slug must exist in the registry
 find daily-log -maxdepth 1 -name '*.md' 2>/dev/null | while IFS= read -r f; do
   base=$(basename "$f" .md)
@@ -184,6 +199,28 @@ area missing its `CLAUDE.md` or `Context.md`. The last `find` lists loose
 files sitting at the repo root; judge each one on whether it belongs inside
 an area instead of leaving it there.
 
+Then the drift scanner, which reads every `CLAUDE.md` for claims the repo no longer
+backs:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+if [ "$PY_OK" = 1 ] && [ -f scripts/check_claudemd.py ]; then
+  python3 scripts/check_claudemd.py
+else
+  echo "skipped: CLAUDE.md scanner (python3 not available or scripts/check_claudemd.py absent)"
+fi
+```
+
+It prints a JSON list: `DEAD` (a file named in a folder tree that does not exist),
+`SKILL` (a `skills/<name>` citation with nothing behind it), `PATH` (a `../`
+reference that does not resolve), and, only when `.github/CODEOWNERS` exists, `SCOPE`
+(a `(scope: shared)` or `(scope: <slug>)` tag on a root Structure bullet that
+disagrees with the CODEOWNERS routing, the slug resolved through `operators/`). Every
+`error` is a finding to propose a fix for; an `info` is worth a sentence. An empty
+list is the normal state and is reported as such. The scanner never edits anything,
+and neither does this step: a `CLAUDE.md` fix is proposed under Step 7's separate
+approval.
+
 ---
 
 ## Step 4: Skills
@@ -223,32 +260,44 @@ the operator runs the one-liner.
 ```bash
 cd "$(git rev-parse --show-toplevel)"
 ADOPTED=0
-if find memory -maxdepth 1 \( -name 'project_*.md' -o -name 'strategic_*.md' \) 2>/dev/null \
+if find memory areas/*/memory -maxdepth 1 \( -name 'project_*.md' -o -name 'strategic_*.md' \) 2>/dev/null \
      | xargs -I{} grep -l '^salience:' {} 2>/dev/null | grep -q .; then
   ADOPTED=1
 fi
 if [ "$PY_OK" = 1 ] && [ -f scripts/memory_gate.py ] && [ "$ADOPTED" = 1 ]; then
   python3 scripts/memory_gate.py
+  [ -f scripts/salience_sweep.py ] && python3 scripts/salience_sweep.py | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+restamps, cold, errors = len(d["restamps"]), len(d["emoji_suggestions"]), len(d["errors"])
+print(f"salience sweep: {restamps} restamps, {cold} cold items, {errors} date errors (details via /memory-checkup)")
+'
 else
-  # Inline checks A, B, D from /memory-checkup Step 1 (same logic, safer extraction).
-  grep -nE '^- \[[^]]+\]\([^)]+\.md\)' memory/MEMORY.md | while IFS=: read -r ln rest; do
-    tmp="${rest#*\(}"
-    relpath="${tmp%%\)*}"
-    [ -f "memory/$relpath" ] || echo "ORPHAN ROW (MEMORY.md line $ln): memory/$relpath does not exist"
-  done
-  for f in memory/*.md; do
-    base=$(basename "$f")
-    case "$base" in MEMORY.md|CLAUDE.md|INDEX.generated.md|*_template.md|*_example.md) continue ;; esac
-    grep -q "($base)" memory/MEMORY.md || echo "ORPHAN FILE: $f has no row in MEMORY.md"
-  done
-  { find memory -maxdepth 1 -name 'project_*.md'; find memory -maxdepth 1 -name 'strategic_*.md'; } 2>/dev/null | while IFS= read -r f; do
-    base=$(basename "$f")
-    case "$base" in *_template.md|*_example.md) continue ;; esac
-    fm=$(awk '/^---$/{if(x)exit;x=1;next} x && /^status:/{sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
-    row=$(grep -F "($base)" memory/MEMORY.md | head -1)
-    if [ -n "$fm" ] && [ -n "$row" ]; then
-      case "$row" in *"$fm"*) : ;; *) echo "EMOJI MISMATCH: $base frontmatter is $fm but its index row differs" ;; esac
-    fi
+  # Inline checks A, B, D from /memory-checkup Step 1 (same logic, safer extraction),
+  # once per memory root (memory/ plus every areas/<name>/memory/ with a MEMORY.md).
+  ROOTS="memory"
+  for d in areas/*/memory; do [ -f "$d/MEMORY.md" ] && ROOTS="$ROOTS $d"; done
+  for R in $ROOTS; do
+    grep -nE '^- \[[^]]+\]\([^)]+\.md\)' "$R/MEMORY.md" | while IFS=: read -r ln rest; do
+      tmp="${rest#*\(}"
+      relpath="${tmp%%\)*}"
+      [ -f "$R/$relpath" ] || echo "ORPHAN ROW ($R/MEMORY.md line $ln): $R/$relpath does not exist"
+    done
+    for f in "$R"/*.md; do
+      base=$(basename "$f")
+      case "$base" in MEMORY.md|REFERENCES.md|CLAUDE.md|INDEX.generated.md|*_template.md|*_example.md) continue ;; esac
+      cat "$R/MEMORY.md" "$R/REFERENCES.md" 2>/dev/null | grep -q "($base)" \
+        || echo "ORPHAN FILE: $f has no row in $R/MEMORY.md or $R/REFERENCES.md"
+    done
+    { find "$R" -maxdepth 1 -name 'project_*.md'; find "$R" -maxdepth 1 -name 'strategic_*.md'; } 2>/dev/null | while IFS= read -r f; do
+      base=$(basename "$f")
+      case "$base" in *_template.md|*_example.md) continue ;; esac
+      fm=$(awk '/^---$/{if(x)exit;x=1;next} x && /^status:/{sub(/^status:[[:space:]]*/,""); print; exit}' "$f")
+      row=$(grep -F "($base)" "$R/MEMORY.md" | head -1)
+      if [ -n "$fm" ] && [ -n "$row" ]; then
+        case "$row" in *"$fm"*) : ;; *) echo "EMOJI MISMATCH: $base frontmatter is $fm but its index row differs" ;; esac
+      fi
+    done
   done
   echo "(inline pass only; run /memory-checkup for the full sweep, including archive and wikilink checks)"
 fi
@@ -264,34 +313,44 @@ detection logic and output shape, with one deliberate difference: the field
 extraction inside each loop uses a single `awk` call or plain parameter
 expansion instead of a piped `awk | grep | sed` chain. That is a genuine
 improvement on its own, fewer forked processes per iteration, independent of
-the note below.
+any shell quirk.
 
-**Verification note.** On the build machine's harness, a longer zsh script
-that runs several `<pipeline> | while read; do ...; done` loops back to back
-occasionally left external commands (`basename`, `grep`) unresolved for the
-rest of that same script run, both with this skill's own blocks and,
-unmodified, with `/memory-checkup` Step 1 checks A and D. It did not
-reproduce reliably in short, isolated repros, it never affected `bash`, and
-`awk`/`sed`/`find`/`grep` used earlier in the same script were unaffected.
-The cause was not pinned down: it survived switching the affected loop from
-pipe-fed to redirection-fed and from multi-stage pipes to single-command
-extraction, which points at something in that machine's zsh session rather
-than a fixable pattern in this file. Flagging it for the team lead to
-re-check on a plain (non-sandboxed) terminal; it does not change any of the
-logic above. This inline pass is a summary, not the full sweep, it skips the
-archive-listing check (C) and the wikilink check (E); say so and point at
-`/memory-checkup` for those. The `memory/*.md` glob here is safe unguarded:
-`MEMORY.md` and `CLAUDE.md` always exist in `memory/`, so it never has zero
-matches.
+If a command is reported as not found mid-run, rerun the block under bash
+before treating it as a finding (see `reference/incidents.md`, row
+`zsh-loop-lookup`). This inline pass is a summary, not the full sweep: it
+skips the archive-listing check (C) and the wikilink check (E); say so and
+point at `/memory-checkup` for those. The `"$R"/*.md` glob is safe
+unguarded: every root in `ROOTS` holds a `MEMORY.md` by construction, so it
+never has zero matches.
 
 ---
 
 ## Step 6: Git layer (governance pack, degrades gracefully)
 
-This step has no local artifact to check for "is `docs/GOVERNANCE.md` step 1
-adopted": branch protection is a GitHub-side setting with nothing written
-into the repo itself. So adoption is detected by the same call that reports
-on it, gated first on whether that call can even be made:
+Two halves: a local one that needs no tool, and a GitHub one gated on `gh`.
+
+The local half is the coherence check of `docs/GOVERNANCE.md` step 3. It is inert
+while `.github/sensitive-paths.txt` has no active pattern, and otherwise reports an
+active list with no `sensitive_owner`, an owner without a `github` value, a clone
+whose `core.hooksPath` is not `githooks`, a missing tripwire workflow, and drift
+between the pattern list and CODEOWNERS in both directions:
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+if [ -f scripts/governance-check.sh ]; then
+  bash scripts/governance-check.sh
+else
+  echo "skipped: governance check (scripts/governance-check.sh absent)"
+fi
+```
+
+Each `FINDING:` line is one finding for Step 7, with the fix it names. The `inactive`
+line is not a finding: a team that has not adopted step 3 is in a normal state.
+
+The GitHub half has no local artifact to check for "is `docs/GOVERNANCE.md` step 1
+adopted": branch protection is a GitHub-side setting with nothing written into the
+repo itself. So adoption is detected by the same call that reports on it, gated first
+on whether that call can even be made:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -308,6 +367,10 @@ else
   else
     echo "skipped: governance step 3 not adopted (.github/CODEOWNERS not present)"
   fi
+  # pull requests nobody has reviewed, opened before today: an ISO date compares as a string
+  gh pr list --state open --json number,title,createdAt,reviewDecision \
+    --jq '.[] | select(.reviewDecision == "" and (.createdAt[0:10]) < "'"$TODAY"'") | "UNREVIEWED PR #\(.number) (\(.title)) opened \(.createdAt[0:10])"' 2>/dev/null \
+    || echo "skipped: could not list pull requests"
 fi
 ```
 
@@ -315,7 +378,8 @@ Expected values when `docs/GOVERNANCE.md` step 1 is active: `enforce_admins:
 true`, `linear: true`, `force_push: false`, `deletions: false`; CODEOWNERS
 errors `0`. Any drift from those values is a finding, propose the exact `gh
 api` fix already written in `docs/GOVERNANCE.md` step 1, never apply it
-unasked, branch protection is repo-admin territory.
+unasked, branch protection is repo-admin territory. An UNREVIEWED PR line is a
+finding: propose `/pr-review <n>`.
 
 ---
 

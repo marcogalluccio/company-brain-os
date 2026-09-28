@@ -4,6 +4,7 @@ git_names:
   - <exact `git config user.name` value>
 github: <github-username>
 role: <free text>
+sensitive_owner: false
 ---
 
 <!-- CUSTOMIZE: Copy this file to operators/<slug>.md, fill in the

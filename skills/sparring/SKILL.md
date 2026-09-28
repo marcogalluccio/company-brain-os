@@ -42,12 +42,12 @@ Three sizes:
 
 **Non-negotiable default:** if the topic already has a memory file, a folder,
 or a next action recorded in the brain, **start from Quick**. Never from Deep.
-The mistake to not repeat is opening the full flow when the operator only
-wanted the minimal increment inside a project that is already framed.
+Opening the full flow on a topic already framed in memory wastes the session:
+the operator usually wants the minimal increment, not a restart.
 
 Declare the size and ask for confirmation in one line:
 
-> "Topic: pricing for the course. Feels like **Quick** to me (3 questions,
+> "Topic: pricing for the annual plan. Feels like **Quick** to me (3 questions,
 > one attack, no file), the project is already framed in memory. Confirm, or
 > do you want Standard?"
 
@@ -84,7 +84,8 @@ Rules:
 - **If the answer is already in a repo file, read it instead of asking.**
   Asking for something already written is the most common waste.
 - **Resolve dependencies in order:** the upstream decision first, then
-  whatever rests on it.
+  whatever rests on it. If an upstream answer changes later, recheck every
+  answer that rested on it before moving on.
 - **If the operator does not know:** record it as open with the name of who
   can resolve it, and move on. Do not get stuck.
 - **Before closing the phase**, ask one net question: "anything we haven't
@@ -93,12 +94,12 @@ Rules:
 Turn format:
 
 ```
-Q3 - Course pricing
+Q3 - Annual plan pricing
 
-Do you sell to firms of 3-5 people, or 15+?
+Do you sell to teams of 3-5 people, or 50+?
 
 -> My guess: 3-5. Those are the ones who already reached out
-   (the two firms that asked last month).
+   (the two teams that asked last month).
 ```
 
 ---
@@ -124,12 +125,12 @@ happen.
 
 1. **A fact in the repo that contradicts what was said.** Numbers, dates,
    past decisions, a project's status in memory.
-   *"You said 15+ people, but the pipeline in memory shows 4."*
+   *"You said 50+ people, but the pipeline in memory shows 4."*
 2. **An assumed premise that was never tested.**
-   *"You're assuming they want training. They asked for a tool, not a
-   course."*
+   *"You're assuming they want a bigger plan. They asked for an
+   integration, not a new plan."*
 3. **A contradiction between two of today's answers.**
-   *"At Q2 you said free pilot, at Q6 full ticket."*
+   *"At Q2 you said a first-year discount, at Q6 full price."*
 4. **An uncounted cost:** the operator's own time, opportunity cost, a
    dependency on a third party.
    *"Next month is already full. What does this push out?"*

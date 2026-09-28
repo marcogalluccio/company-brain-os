@@ -106,6 +106,16 @@ On Windows, create a junction instead, from `cmd` in the repo folder:
 
 `.claude/` is gitignored, so this link stays local to your machine.
 
+If your team adopted `docs/GOVERNANCE.md` step 3 (there are active lines in
+`.github/sensitive-paths.txt`), activate the local guard on this clone too:
+
+```bash
+git config core.hooksPath githooks
+```
+
+It is a per-clone setting, so every new clone repeats it; `/system-checkup` reminds
+you when it is missing.
+
 ---
 
 ## Step 7: Optional MCP connectors

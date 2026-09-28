@@ -16,6 +16,7 @@ git_names:
   - <exact `git config user.name` value>
 github: <github-username>
 role: <free text>
+sensitive_owner: false
 ---
 ```
 
@@ -27,9 +28,19 @@ role: <free text>
   operator, across every machine they use. A list, not a single string:
   someone with a typo'd identity on one machine adds the typo here rather
   than fixing history.
-- `github`: their GitHub username, for collaborator management and
-  CODEOWNERS.
+- `github`: their GitHub username, for collaborator management, CODEOWNERS,
+  and the CI tripwire of `docs/GOVERNANCE.md` step 3, which recognises a
+  push by this value.
 - `role`: free text. What they do, in their own words or yours.
+- `sensitive_owner`: optional, `true` or `false` (absent means `false`).
+  `true` marks an operator who may push the paths listed in
+  `.github/sensitive-paths.txt` straight to `main` and who reviews the
+  proposal pull requests everyone else opens for them. Meaningless until
+  `docs/GOVERNANCE.md` step 3 is adopted. More than one operator can carry it.
+
+Only the registry files directly in `operators/` count. A file moved under
+`operators/archive/` keeps its slug reserved without claiming an identity: that is
+where the offboarding checklist in `docs/GOVERNANCE.md` sends departed operators.
 
 ## Resolution rule
 

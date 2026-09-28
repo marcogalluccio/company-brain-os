@@ -24,13 +24,19 @@ any of the steps below without it.
 ## Mode A: no argument, list and summarize
 
 ```bash
-gh pr list --state open --json number,title,author,createdAt,reviewDecision,mergeStateStatus
+gh pr list --state open --json number,title,author,createdAt,reviewDecision,mergeStateStatus,headRefName
 ```
 
 For each PR, show one line: number, title, author, age (from `createdAt`),
 review decision (`APPROVED`, `CHANGES_REQUESTED`, or none), merge state
 (`CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`). Highlight any PR whose merge state is
 blocked or dirty.
+
+A PR whose `headRefName` matches `*/proposals-*` is a proposal: a non-owner's
+change on a sensitive path, waiting for a sensitive owner (`docs/GOVERNANCE.md`
+step 3). List proposals first, prefixed `[proposal]`, and say who they are
+waiting on: teams usually agree a turnaround for proposals, often the same day,
+and a proposal that has aged past it is the first finding of this run.
 
 Close with: "Pick a PR number to focus on, or call `/pr-review <n>` directly."
 
@@ -82,13 +88,46 @@ does (PR number, squash, branch deletion, target branch), then wait for a
 pointed "ok". Never merge on momentum carried over from earlier in the
 conversation: an earlier "yes let's merge that" is not this gate.
 
+**Proposal gate.** If the head branch is a proposal (`*/proposals-*`), checks run
+before anything else, all read from the registry, never from a name written here:
+
+```bash
+HEAD_REF=$(gh pr view <n> --json headRefName -q .headRefName)
+case "$HEAD_REF" in
+  */proposals-*)
+    ME_SLUG=$(scripts/lib/operator-registry.sh resolve) || exit 1
+    ME_LOGIN=$(scripts/lib/operator-registry.sh field "$ME_SLUG" github | sed 's/^@//' | tr '[:upper:]' '[:lower:]')
+    AUTHOR=$(gh pr view <n> --json author -q .author.login | tr '[:upper:]' '[:lower:]')
+    if [ -z "$AUTHOR" ]; then
+      echo "PROPOSAL GATE: the pull request's author could not be read; the gate cannot be evaluated."
+      exit 1
+    fi
+    if [ "$AUTHOR" = "$ME_LOGIN" ]; then
+      echo "PROPOSAL GATE: you opened this proposal; a sensitive owner merges it, never the proposer."
+      exit 1
+    fi
+    if ! scripts/lib/operator-registry.sh is-sensitive-owner "$ME_SLUG"; then
+      echo "PROPOSAL GATE: operators/$ME_SLUG.md does not declare sensitive_owner: true; only a sensitive owner merges a proposal."
+      exit 1
+    fi
+    ;;
+esac
+```
+
+On any `PROPOSAL GATE` line, stop and show it. Do not offer `merge` for that PR;
+`comment`, `request-changes`, `close` (own proposal only, with a reason) and `skip`
+stay available. On an `IDENTITY ERROR` from the registry, stop as well: the rule in
+`operators/CLAUDE.md` is binding here too.
+
 If the PR's head branch (`headRefName` from Step 1) is checked out in a local
 worktree, remove the worktree first, or the local branch deletion below
 fails:
 
 ```bash
 HEAD_REF=$(gh pr view <n> --json headRefName -q .headRefName)
-WT_PATH=$(git worktree list --porcelain | awk -v b="refs/heads/$HEAD_REF" '/^worktree /{p=$2} /^branch /{if ($2==b) print p}')
+# The porcelain listing prints, per worktree, a "worktree <path>" line, a HEAD
+# line, then "branch refs/heads/<name>": the path sits two lines above the match.
+WT_PATH=$(git worktree list --porcelain | grep -B2 -Fx "branch refs/heads/$HEAD_REF" | grep "^worktree " | cut -d" " -f2-)
 [ -n "$WT_PATH" ] && git worktree remove "$WT_PATH"
 ```
 
@@ -118,6 +157,8 @@ Local `main` realigns on its own at the next `/sync` or debrief.
 
 - Always show the diff before offering merge. Never merge blind.
 - One PR at a time. No bulk merges.
+- A proposal is merged by a sensitive owner who is not its author. Never by the
+  proposer, never by momentum.
 - Never close someone else's PR without asking first. If it has problems,
   comment or request changes instead.
 - Never force anything: no force-push, no bypassing branch protection.
